@@ -19,8 +19,7 @@
  *      MA 02110-1301, USA.
  */
 
-#include <glib.h>
-#include <glib/gthread.h>
+#include <gtk/gtk.h>
 
 #include <dbus/dbus.h>
 #include <dbus/dbus-glib-lowlevel.h>
@@ -33,13 +32,20 @@
 G_DEFINE_TYPE(Manager, manager, G_TYPE_OBJECT)
 
 struct _ManagerPrivate {
-    GMainLoop *loop;
-    guint ref_cnt;
+    GtkBuilder *builder;
+
+    GtkWidget *window;
+    GtkWidget *view;
+    GtkWidget *status;
+
+    GtkTreeModel *store;
+
+    GtkStatusIcon *icon;
 
     DBusGConnection *conn;
     DBusGProxy *proxy;
 
-    GHashTable *mos;
+    guint new_id;
 };
 
 static guint signal_add;
@@ -80,8 +86,50 @@ manager_init (Manager *self)
 {
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE((self), MANAGER_TYPE, ManagerPrivate);
 
-    self->priv->ref_cnt = 0;
-    self->priv->loop = g_main_loop_new (NULL, FALSE);
+    self->priv->builder = gtk_builder_new ();
+    gtk_builder_add_from_file (self->priv->builder,
+        // SHAREDIR "/ui/main.ui", NULL);
+        "data/ui/main.ui", NULL);
+
+    self->priv->window = GTK_WIDGET (gtk_builder_get_object (self->priv->builder, "main_window"));
+    self->priv->view = GTK_WIDGET (gtk_builder_get_object (self->priv->builder, "main_view"));
+    self->priv->status = GTK_WIDGET (gtk_builder_get_object (self->priv->builder, "main_status"));
+
+    self->priv->store = GTK_TREE_MODEL (gtk_list_store_new (1, G_TYPE_OBJECT));
+    gtk_tree_view_set_model (GTK_TREE_VIEW (self->priv->view), self->priv->store);
+
+    GtkCellRenderer *renderer;
+    GtkTreeViewColumn *column;
+
+    renderer = gtk_cell_renderer_progress_new ();
+    column = gtk_tree_view_column_new_with_attributes ("Progress", renderer, NULL);
+//    gtk_tree_view_column_set_cell_data_func (column, renderer,
+//        (GtkTreeCellDataFunc) status_column_func, NULL, NULL);
+    gtk_tree_view_append_column (GTK_TREE_VIEW (self->priv->view), column);
+
+    renderer = gtk_cell_renderer_text_new ();
+    column = gtk_tree_view_column_new_with_attributes ("Download", renderer, NULL);
+//    gtk_tree_view_column_set_cell_data_func (column, renderer,
+//        (GtkTreeCellDataFunc) status_column_func, NULL, NULL);
+    gtk_tree_view_column_set_expand (column, TRUE);
+    gtk_tree_view_append_column (GTK_TREE_VIEW (self->priv->view), column);
+
+    renderer = gtk_cell_renderer_text_new ();
+    column = gtk_tree_view_column_new_with_attributes ("remaining", renderer, NULL);
+//    gtk_tree_view_column_set_cell_data_func (column, renderer,
+//        (GtkTreeCellDataFunc) status_column_func, NULL, NULL);
+    gtk_tree_view_append_column (GTK_TREE_VIEW (self->priv->view), column);
+
+    GtkTreeIter iter;
+    gtk_list_store_append (GTK_LIST_STORE (self->priv->store), &iter);
+
+    g_signal_connect (self->priv->window, "destroy", G_CALLBACK (manager_stop), NULL);
+
+    self->priv->icon = gtk_status_icon_new_from_stock (GTK_STOCK_GO_DOWN);
+
+    gtk_widget_show_all (self->priv->window);
+
+    self->priv->new_id = 1;
 
     self->priv->conn = dbus_g_bus_get (DBUS_BUS_SESSION, NULL);
     self->priv->proxy = dbus_g_proxy_new_for_name (self->priv->conn,
@@ -89,9 +137,6 @@ manager_init (Manager *self)
 
     org_freedesktop_DBus_request_name (self->priv->proxy,
         MANAGER_DBUS_SERVICE, DBUS_NAME_FLAG_DO_NOT_QUEUE, NULL, NULL);
-
-    self->priv->mos = g_hash_table_new_full (g_str_hash,
-        g_str_equal, g_free, g_object_unref);
 
     dbus_g_connection_register_g_object (self->priv->conn,
         MANAGER_DBUS_PATH, G_OBJECT (self));
@@ -106,32 +151,31 @@ manager_new ()
 void
 manager_run (Manager *self)
 {
-   g_main_loop_run (self->priv->loop);
+   gtk_main ();
 }
 
 void
 manager_stop (Manager *self)
 {
-   g_main_loop_quit (self->priv->loop);
+    gtk_main_quit ();
 }
 
 gboolean
-manager_add_download (Manager *self, gchar *url, gchar *dest, GError **error)
+manager_add_download (Manager *self, gchar *url, gchar *dest, guint *ident, GError **error)
 {
+    g_print ("Manager Add Download %s -> %s\n", url, dest);
 
+    *ident = self->priv->new_id++;
 }
-
 
 int
 main (int argc, char *argv[])
 {
-    Manager *gdb;
+    Manager *manager;
 
-    g_type_init ();
+    gtk_init (&argc, &argv);
 
-//    dbus_g_thread_init ();
+    manager = manager_new ();
 
-    gdb = manager_new ();
-
-    manager_run (gdb);
+    manager_run (manager);
 }

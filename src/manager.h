@@ -54,7 +54,10 @@ struct _ManagerClass {
 Manager *manager_new ();
 GType manager_get_type (void);
 
-gboolean manager_add_download (Manager *self, gchar *url, gchar *dest, GError **error);
+void manager_run (Manager *self);
+void manager_stop (Manager *self);
+
+gboolean manager_add_download (Manager *self, gchar *url, gchar *dest, guint *ident, GError **error);
 
 G_END_DECLS
 

@@ -5,6 +5,7 @@
         <method name="add_download">
             <arg name="url" type="s"/>
             <arg name="dest" type="s"/>
+            <arg name="ident" type="u" direction="out"/>
         </method>
 <!--    <signal name="entry_added">
             <arg name="ident" type="u"/>
