@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<node name="/org/gnome/GDMan/Manager">
+    <interface name="org.gnome.GDMan.Manager">
+        <annotation name="org.freedesktop.DBus.GLib.CSymbol" value="manager"/>
+        <method name="add_download">
+            <arg name="url" type="s"/>
+            <arg name="dest" type="s"/>
+        </method>
+<!--    <signal name="entry_added">
+            <arg name="ident" type="u"/>
+        </signal> -->
+    </interface>
+</node>
