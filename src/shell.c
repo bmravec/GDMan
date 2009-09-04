@@ -25,6 +25,8 @@
 
 G_DEFINE_TYPE(Shell, shell, G_TYPE_OBJECT)
 
+static Shell *instance;
+
 struct _ShellPrivate {
     guint tmp;
 };
@@ -52,6 +54,8 @@ shell_class_init (ShellClass *klass)
     g_type_class_add_private ((gpointer) klass, sizeof (ShellPrivate));
 
     object_class->finalize = shell_finalize;
+
+    instance = NULL;
 }
 
 static void
