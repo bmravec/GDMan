@@ -30,4 +30,6 @@ AC_SUBST(DBUSBINDINGTOOL)
 AC_OUTPUT([
 Makefile
 src/Makefile
+data/Makefile
+data/ui/Makefile
 ])
