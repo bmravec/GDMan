@@ -21,6 +21,8 @@
 
 #include "download.h"
 
+static guint signal_state_changed;
+
 static void
 download_base_init (gpointer g_iface)
 {
@@ -28,6 +30,10 @@ download_base_init (gpointer g_iface)
 
     if (!initialized) {
         initialized = TRUE;
+
+        signal_state_changed = g_signal_new ("state-changed", DOWNLOAD_TYPE,
+            G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_VOID__INT,
+            G_TYPE_NONE, 1, G_TYPE_INT);
     }
 }
 
@@ -39,7 +45,7 @@ download_get_type ()
         static const GTypeInfo object_info = {
             sizeof(DownloadInterface),
             download_base_init, /* base init */
-            NULL,                   /* base finalize */
+            NULL,               /* base finalize */
         };
 
         object_type = g_type_register_static(G_TYPE_INTERFACE,
@@ -121,15 +127,68 @@ download_get_percentage (Download *self)
     }
 }
 
-gboolean
-download_is_complete (Download *self)
+gint
+download_get_state (Download *self)
 {
     DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
 
-    if (iface->is_completed) {
-        return
-        iface->is_completed (self);
+    if (iface->get_state) {
+        return iface->get_state (self);
     } else {
-        return -1;
+        return DOWNLOAD_STATE_NONE;
     }
+}
+
+gboolean
+download_start (Download *self)
+{
+    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
+
+    if (iface->start) {
+        return iface->start (self);
+    } else {
+        return FALSE;
+    }
+}
+
+gboolean
+download_stop (Download *self)
+{
+    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
+
+    if (iface->stop) {
+        return iface->stop (self);
+    } else {
+        return FALSE;
+    }
+}
+
+gboolean
+download_cancel (Download *self)
+{
+    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
+
+    if (iface->cancel) {
+        return iface->cancel (self);
+    } else {
+        return FALSE;
+    }
+}
+
+gboolean
+download_pause (Download *self)
+{
+    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
+
+    if (iface->pause) {
+        return iface->pause (self);
+    } else {
+        return FALSE;
+    }
+}
+
+void
+_emit_state_changed (Download *self, gint state)
+{
+    g_signal_emit (self, signal_state_changed, state);
 }

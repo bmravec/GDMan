@@ -29,6 +29,15 @@
 #define IS_DOWNLOAD(object) (G_TYPE_CHECK_INSTANCE_TYPE ((object), DOWNLOAD_TYPE))
 #define DOWNLOAD_GET_IFACE(obj) (G_TYPE_INSTANCE_GET_INTERFACE ((obj), DOWNLOAD_TYPE, DownloadInterface))
 
+enum {
+    DOWNLOAD_STATE_NONE = 0,
+    DOWNLOAD_STATE_RUNNING,
+    DOWNLOAD_STATE_PAUSED,
+    DOWNLOAD_STATE_COMPLETED,
+    DOWNLOAD_STATE_CANCELED,
+    DOWNLOAD_STATE_STOPPED,
+};
+
 G_BEGIN_DECLS
 
 typedef struct _Download Download;
@@ -46,7 +55,12 @@ struct _DownloadInterface {
     gint   (*get_time_rem) (Download *self);
 
     gint   (*get_percentage) (Download *self);
-    gboolean (*is_completed) (Download *self);
+    gint   (*get_state) (Download *self);
+
+    gboolean (*start) (Download *self);
+    gboolean (*stop) (Download *self);
+    gboolean (*cancel) (Download *self);
+    gboolean (*pause) (Download *self);
 };
 
 GType download_get_type (void);
@@ -60,7 +74,14 @@ gint download_get_time_total (Download *self);
 gint download_get_time_remaining (Download *self);
 
 gint download_get_percentage (Download *self);
-gboolean download_is_complete (Download *self);
+gint download_get_state (Download *self);
+
+gboolean download_start (Download *self);
+gboolean download_stop (Download *self);
+gboolean download_cancel (Download *self);
+gboolean download_pause (Download *self);
+
+void _emit_state_changed (Download *self, gint state);
 
 G_END_DECLS
 

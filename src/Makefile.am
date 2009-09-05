@@ -16,7 +16,8 @@ bin_PROGRAMS = gdman
 gdman_LDADD = $(GLIB_LIBS) $(GTK_LIBS) $(DBUS_LIBS)
 gdman_SOURCES = \
     manager.c manager.h manager-glue.h \
-    download.c download.h
+    download.c download.h \
+    http-download.c http-download.h
 
 BUILT_SOURCES = manager-glue.h
 
