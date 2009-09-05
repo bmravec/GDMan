@@ -49,12 +49,11 @@ struct _DownloadInterface {
     gchar* (*get_title) (Download *self);
 
     gint   (*get_size_tot) (Download *self);
-    gint   (*get_size_rem) (Download *self);
+    gint   (*get_size_comp) (Download *self);
 
     gint   (*get_time_tot) (Download *self);
     gint   (*get_time_rem) (Download *self);
 
-    gint   (*get_percentage) (Download *self);
     gint   (*get_state) (Download *self);
 
     gboolean (*start) (Download *self);
@@ -68,12 +67,11 @@ GType download_get_type (void);
 gchar *download_get_title (Download *self);
 
 gint download_get_size_total (Download *self);
-gint download_get_size_remaining (Download *self);
+gint download_get_size_completed (Download *self);
 
 gint download_get_time_total (Download *self);
 gint download_get_time_remaining (Download *self);
 
-gint download_get_percentage (Download *self);
 gint download_get_state (Download *self);
 
 gboolean download_start (Download *self);
@@ -81,7 +79,11 @@ gboolean download_stop (Download *self);
 gboolean download_cancel (Download *self);
 gboolean download_pause (Download *self);
 
-void _emit_state_changed (Download *self, gint state);
+void _emit_download_state_changed (Download *self, gint state);
+void _emit_download_position_changed (Download *self);
+
+gchar *time_to_string (gint time);
+gchar *size_to_string (gint size);
 
 G_END_DECLS
 

@@ -22,6 +22,7 @@
 #include "download.h"
 
 static guint signal_state_changed;
+static guint signal_pos_changed;
 
 static void
 download_base_init (gpointer g_iface)
@@ -34,6 +35,10 @@ download_base_init (gpointer g_iface)
         signal_state_changed = g_signal_new ("state-changed", DOWNLOAD_TYPE,
             G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_VOID__INT,
             G_TYPE_NONE, 1, G_TYPE_INT);
+
+        signal_pos_changed = g_signal_new ("position-changed", DOWNLOAD_TYPE,
+            G_SIGNAL_RUN_LAST, 0, NULL, NULL, g_cclosure_marshal_VOID__VOID,
+            G_TYPE_NONE, 0);
     }
 }
 
@@ -80,12 +85,12 @@ download_get_size_total (Download *self)
 }
 
 gint
-download_get_size_remaining (Download *self)
+download_get_size_completed (Download *self)
 {
     DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
 
-    if (iface->get_size_rem) {
-        return iface->get_size_rem (self);
+    if (iface->get_size_comp) {
+        return iface->get_size_comp (self);
     } else {
         return -1;
     }
@@ -110,18 +115,6 @@ download_get_time_remaining (Download *self)
 
     if (iface->get_time_rem) {
         return iface->get_time_rem(self);
-    } else {
-        return -1;
-    }
-}
-
-gint
-download_get_percentage (Download *self)
-{
-    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
-
-    if (iface->get_percentage) {
-        return iface->get_percentage (self);
     } else {
         return -1;
     }
@@ -188,7 +181,43 @@ download_pause (Download *self)
 }
 
 void
-_emit_state_changed (Download *self, gint state)
+_emit_download_state_changed (Download *self, gint state)
 {
-    g_signal_emit (self, signal_state_changed, state);
+    g_signal_emit (self, signal_state_changed, 0, state);
+}
+
+void
+_emit_download_position_changed (Download *self)
+{
+    g_signal_emit (self, signal_pos_changed, 0);
+}
+
+gchar*
+time_to_string (gint time)
+{
+    if (time == -1) {
+        return g_strdup ("");
+    }
+
+    if (time < 60) {
+        return g_strdup_printf ("%d seconds", time);
+    } else if (time < 3600) {
+        return g_strdup_printf ("%2d.%02d", time / 60, time % 60);
+    } else {
+        return g_strdup_printf ("%d.%02d.%02d", time / 3600, (time / 60) % 60, time % 60);
+    }
+}
+
+gchar*
+size_to_string (gint size)
+{
+    if (size < 1024) {
+        return g_strdup_printf ("%d bytes", size);
+    } else if (size < 1024*1024) {
+        return g_strdup_printf ("%.2f KB", size / 1024.0);
+    } else if (size < 1024 * 1024 * 1024) {
+        return g_strdup_printf ("%.2f MB", size / (1024.0 * 1024.0));
+    } else {
+        return g_strdup_printf ("%.2f GB", size / (1024.0 * 1024.0 * 1024.0));
+    }
 }
