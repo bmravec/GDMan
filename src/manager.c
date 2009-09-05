@@ -29,6 +29,9 @@
 #include "manager.h"
 #include "manager-glue.h"
 
+#include "http-download.h"
+#include "download.h"
+
 G_DEFINE_TYPE(Manager, manager, G_TYPE_OBJECT)
 
 struct _ManagerPrivate {
@@ -50,6 +53,14 @@ struct _ManagerPrivate {
 
 static guint signal_add;
 static guint signal_remove;
+
+static void download_pos_changed (Download *download, Manager *self);
+static void progress_column_func (GtkTreeViewColumn *column, GtkCellRenderer *cell,
+    GtkTreeModel *model, GtkTreeIter *iter, gchar *data);
+static void title_column_func (GtkTreeViewColumn *column, GtkCellRenderer *cell,
+    GtkTreeModel *model, GtkTreeIter *iter, gchar *data);
+static void time_column_func (GtkTreeViewColumn *column, GtkCellRenderer *cell,
+    GtkTreeModel *model, GtkTreeIter *iter, gchar *data);
 
 static void
 manager_finalize (GObject *object)
@@ -103,25 +114,22 @@ manager_init (Manager *self)
 
     renderer = gtk_cell_renderer_progress_new ();
     column = gtk_tree_view_column_new_with_attributes ("Progress", renderer, NULL);
-//    gtk_tree_view_column_set_cell_data_func (column, renderer,
-//        (GtkTreeCellDataFunc) status_column_func, NULL, NULL);
+    gtk_tree_view_column_set_cell_data_func (column, renderer,
+        (GtkTreeCellDataFunc) progress_column_func, NULL, NULL);
     gtk_tree_view_append_column (GTK_TREE_VIEW (self->priv->view), column);
 
     renderer = gtk_cell_renderer_text_new ();
     column = gtk_tree_view_column_new_with_attributes ("Download", renderer, NULL);
-//    gtk_tree_view_column_set_cell_data_func (column, renderer,
-//        (GtkTreeCellDataFunc) status_column_func, NULL, NULL);
+    gtk_tree_view_column_set_cell_data_func (column, renderer,
+        (GtkTreeCellDataFunc) title_column_func, NULL, NULL);
     gtk_tree_view_column_set_expand (column, TRUE);
     gtk_tree_view_append_column (GTK_TREE_VIEW (self->priv->view), column);
 
     renderer = gtk_cell_renderer_text_new ();
     column = gtk_tree_view_column_new_with_attributes ("remaining", renderer, NULL);
-//    gtk_tree_view_column_set_cell_data_func (column, renderer,
-//        (GtkTreeCellDataFunc) status_column_func, NULL, NULL);
+    gtk_tree_view_column_set_cell_data_func (column, renderer,
+        (GtkTreeCellDataFunc) time_column_func, NULL, NULL);
     gtk_tree_view_append_column (GTK_TREE_VIEW (self->priv->view), column);
-
-    GtkTreeIter iter;
-    gtk_list_store_append (GTK_LIST_STORE (self->priv->store), &iter);
 
     g_signal_connect (self->priv->window, "destroy", G_CALLBACK (manager_stop), NULL);
 
@@ -166,16 +174,130 @@ manager_add_download (Manager *self, gchar *url, gchar *dest, guint *ident, GErr
     g_print ("Manager Add Download %s -> %s\n", url, dest);
 
     *ident = self->priv->new_id++;
+
+    Download *d = http_download_new (url, dest);
+
+    // Add to view and connect position changed signal handler
+    GtkTreeIter iter;
+    gtk_list_store_append (GTK_LIST_STORE (self->priv->store), &iter);
+    gtk_list_store_set (GTK_LIST_STORE (self->priv->store), &iter, 0, d, -1);
+    g_signal_connect (d, "position-changed", G_CALLBACK (download_pos_changed), self);
+
+    download_start (d);
+}
+
+static void
+download_pos_changed (Download *download, Manager *self)
+{
+    GtkTreeIter iter;
+    Download *d;
+
+    gtk_tree_model_get_iter_first (self->priv->store, &iter);
+
+    do {
+        gtk_tree_model_get (self->priv->store, &iter, 0, &d, -1);
+        if (d == download) {
+            GtkTreePath *path = gtk_tree_model_get_path (self->priv->store, &iter);
+            gtk_tree_model_row_changed (self->priv->store, path, &iter);
+            gtk_tree_path_free (path);
+            return;
+        }
+    } while (gtk_tree_model_iter_next (self->priv->store, &iter));
+}
+
+static void
+progress_column_func (GtkTreeViewColumn *column,
+                      GtkCellRenderer *cell,
+                      GtkTreeModel *model,
+                      GtkTreeIter *iter,
+                      gchar *data)
+{
+    Download *d;
+
+    gtk_tree_model_get (model, iter, 0, &d, -1);
+    if (d) {
+        gint size = download_get_size_total (d);
+        gint comp = download_get_size_completed (d);
+
+        gint per = 100 * comp / size;
+        gchar *str = g_strdup_printf ("%d%%\n", per);
+        g_object_set (G_OBJECT (cell),
+            "text", str,
+            "value", per,
+            "text-xalign", 0.5,
+            "text-yalign", 1.0,
+            NULL);
+        g_free (str);
+    } else {
+        g_object_set (G_OBJECT (cell), "text", "", "value", 0, NULL);
+    }
+}
+
+static void
+title_column_func (GtkTreeViewColumn *column,
+                      GtkCellRenderer *cell,
+                      GtkTreeModel *model,
+                      GtkTreeIter *iter,
+                      gchar *data)
+{
+    Download *d;
+
+    gtk_tree_model_get (model, iter, 0, &d, -1);
+    if (d) {
+        gchar *title = download_get_title (d);
+        gchar *size = size_to_string (download_get_size_total (d));
+        gchar *comp = size_to_string (download_get_size_completed (d));
+
+        gchar *str = g_strdup_printf ("%s\n%s of %s", title, comp, size);
+        g_object_set (G_OBJECT (cell), "text", str, NULL);
+        g_free (size);
+        g_free (comp);
+        g_free (str);
+    } else {
+        g_object_set (G_OBJECT (cell), "text", "", NULL);
+    }
+}
+
+
+static void
+time_column_func (GtkTreeViewColumn *column,
+                      GtkCellRenderer *cell,
+                      GtkTreeModel *model,
+                      GtkTreeIter *iter,
+                      gchar *data)
+{
+    Download *d;
+
+    gtk_tree_model_get (model, iter, 0, &d, -1);
+    if (d) {
+        gchar *str;
+
+        switch (download_get_state (d)) {
+            case DOWNLOAD_STATE_COMPLETED:
+                str = time_to_string (download_get_time_remaining (d));
+                break;
+            case DOWNLOAD_STATE_RUNNING:
+                str = time_to_string (download_get_time_remaining (d));
+                break;
+            default:
+                str = g_strdup ("");
+        }
+
+        g_object_set (G_OBJECT (cell), "text", str, NULL);
+        g_free (str);
+    } else {
+        g_object_set (G_OBJECT (cell), "text", "", NULL);
+    }
 }
 
 int
 main (int argc, char *argv[])
 {
-    Manager *manager;
+    g_thread_init (NULL);
+    gdk_threads_init ();
 
     gtk_init (&argc, &argv);
 
-    manager = manager_new ();
-
+    Manager *manager = manager_new ();
     manager_run (manager);
 }
