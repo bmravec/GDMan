@@ -17,7 +17,10 @@ gdman_LDADD = $(GLIB_LIBS) $(GTK_LIBS) $(DBUS_LIBS)
 gdman_SOURCES = \
     manager.c manager.h manager-glue.h \
     download.c download.h \
-    http-download.c http-download.h
+    http-download.c http-download.h \
+    megaupload-download.c megaupload-download.h \
+    megaupload-manager.c megaupload-manager.h \
+    youtube-download.c youtube-download.h
 
 BUILT_SOURCES = manager-glue.h
 

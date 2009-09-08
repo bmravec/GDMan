@@ -24,6 +24,8 @@
 
 #include <glib-object.h>
 
+#include "download.h"
+
 #define MANAGER_DBUS_SERVICE "org.gnome.GDMan"
 #define MANAGER_DBUS_PATH "/org/gnome/GDMan/Manager"
 
@@ -57,7 +59,10 @@ GType manager_get_type (void);
 void manager_run (Manager *self);
 void manager_stop (Manager *self);
 
+gboolean manager_create_download (Manager *self, gchar *url, gchar *dest);
 gboolean manager_add_download (Manager *self, gchar *url, gchar *dest, guint *ident, GError **error);
+gboolean manager_display_download (Manager *self, Download *download);
+gboolean manager_remove_download (Manager *self, Download *download);
 
 G_END_DECLS
 

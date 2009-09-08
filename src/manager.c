@@ -29,8 +29,12 @@
 #include "manager.h"
 #include "manager-glue.h"
 
-#include "http-download.h"
 #include "download.h"
+#include "http-download.h"
+#include "megaupload-download.h"
+#include "youtube-download.h"
+
+#include "megaupload-manager.h"
 
 G_DEFINE_TYPE(Manager, manager, G_TYPE_OBJECT)
 
@@ -48,8 +52,12 @@ struct _ManagerPrivate {
     DBusGConnection *conn;
     DBusGProxy *proxy;
 
+    MegauploadManager *mu_man;
+
     guint new_id;
 };
+
+static Manager *instance = NULL;
 
 static guint signal_add;
 static guint signal_remove;
@@ -99,8 +107,7 @@ manager_init (Manager *self)
 
     self->priv->builder = gtk_builder_new ();
     gtk_builder_add_from_file (self->priv->builder,
-        // SHAREDIR "/ui/main.ui", NULL);
-        "data/ui/main.ui", NULL);
+        SHARE_DIR "/ui/main.ui", NULL);
 
     self->priv->window = GTK_WIDGET (gtk_builder_get_object (self->priv->builder, "main_window"));
     self->priv->view = GTK_WIDGET (gtk_builder_get_object (self->priv->builder, "main_view"));
@@ -148,18 +155,26 @@ manager_init (Manager *self)
 
     dbus_g_connection_register_g_object (self->priv->conn,
         MANAGER_DBUS_PATH, G_OBJECT (self));
+
+    self->priv->mu_man = megaupload_manager_new ();
 }
 
 Manager*
 manager_new ()
 {
-    return g_object_new (MANAGER_TYPE, NULL);
+    if (!instance) {
+        instance = g_object_new (MANAGER_TYPE, NULL);
+    }
+
+    return instance;
 }
 
 void
 manager_run (Manager *self)
 {
-   gtk_main ();
+    gdk_threads_enter ();
+    gtk_main ();
+    gdk_threads_leave ();
 }
 
 void
@@ -169,21 +184,56 @@ manager_stop (Manager *self)
 }
 
 gboolean
+manager_create_download (Manager *self, gchar *url, gchar *dest)
+{
+    if (g_str_has_prefix (url, "http://")) {
+        gchar **str1 = g_strsplit (url+7, "/", 2);
+        gchar **str2 = g_strsplit (str1[0], ":", 2);
+
+        if (!g_strcmp0 (str2[0], "www.megaupload.com")) {
+            Download *d = megaupload_download_new (url, dest);
+            manager_display_download (self, d);
+            download_start (d);
+        } else if (!g_strcmp0 (str2[0], "www.youtube.com")) {
+            Download *d = youtube_download_new (url, dest);
+            manager_display_download (self, d);
+            download_start (d);
+        } else {
+            Download *d = http_download_new (url, dest, FALSE);
+            manager_display_download (self, d);
+            download_start (d);
+        }
+
+        g_strfreev (str1);
+        g_strfreev (str2);
+    }
+}
+
+gboolean
 manager_add_download (Manager *self, gchar *url, gchar *dest, guint *ident, GError **error)
 {
     g_print ("Manager Add Download %s -> %s\n", url, dest);
 
     *ident = self->priv->new_id++;
 
-    Download *d = http_download_new (url, dest);
+    manager_create_download (self, url, dest);
 
-    // Add to view and connect position changed signal handler
+    return TRUE;
+}
+
+gboolean
+manager_display_download (Manager *self, Download *download)
+{
     GtkTreeIter iter;
     gtk_list_store_append (GTK_LIST_STORE (self->priv->store), &iter);
-    gtk_list_store_set (GTK_LIST_STORE (self->priv->store), &iter, 0, d, -1);
-    g_signal_connect (d, "position-changed", G_CALLBACK (download_pos_changed), self);
+    gtk_list_store_set (GTK_LIST_STORE (self->priv->store), &iter, 0, download, -1);
+    g_signal_connect (download, "position-changed", G_CALLBACK (download_pos_changed), self);
+}
 
-    download_start (d);
+gboolean
+manager_remove_download (Manager *self, Download *download)
+{
+
 }
 
 static void
@@ -218,16 +268,26 @@ progress_column_func (GtkTreeViewColumn *column,
     if (d) {
         gint size = download_get_size_total (d);
         gint comp = download_get_size_completed (d);
-
-        gint per = 100 * comp / size;
-        gchar *str = g_strdup_printf ("%d%%\n", per);
-        g_object_set (G_OBJECT (cell),
-            "text", str,
-            "value", per,
-            "text-xalign", 0.5,
-            "text-yalign", 1.0,
-            NULL);
-        g_free (str);
+        if (size <= 0) {
+            gint val;
+            g_object_get (cell, "pulse", &val, NULL);
+            if (val > 0) {
+                g_object_set (cell, "pulse", val+1, NULL);
+            } else {
+                g_object_set (cell, "pulse", 0, NULL);
+            }
+        } else {
+            gint per = 100 * comp / size;
+            gchar *str = g_strdup_printf ("%d%%\n", per);
+            g_object_set (G_OBJECT (cell),
+                "text", str,
+                "value", per,
+                "text-xalign", 0.5,
+                "text-yalign", 1.0,
+                "pulse", -1,
+                NULL);
+            g_free (str);
+        }
     } else {
         g_object_set (G_OBJECT (cell), "text", "", "value", 0, NULL);
     }
@@ -235,20 +295,27 @@ progress_column_func (GtkTreeViewColumn *column,
 
 static void
 title_column_func (GtkTreeViewColumn *column,
-                      GtkCellRenderer *cell,
-                      GtkTreeModel *model,
-                      GtkTreeIter *iter,
-                      gchar *data)
+                   GtkCellRenderer *cell,
+                   GtkTreeModel *model,
+                   GtkTreeIter *iter,
+                   gchar *data)
 {
     Download *d;
 
     gtk_tree_model_get (model, iter, 0, &d, -1);
     if (d) {
         gchar *title = download_get_title (d);
-        gchar *size = size_to_string (download_get_size_total (d));
+        gint isize = download_get_size_total (d);
+        gchar *size = size_to_string (isize);
         gchar *comp = size_to_string (download_get_size_completed (d));
 
-        gchar *str = g_strdup_printf ("%s\n%s of %s", title, comp, size);
+        gchar *str;
+        if (isize != -1) {
+            str = g_strdup_printf ("%s\n%s of %s", title, comp, size);
+        } else {
+            str = g_strdup_printf ("%s\n%s", title, comp);
+        }
+
         g_object_set (G_OBJECT (cell), "text", str, NULL);
         g_free (size);
         g_free (comp);
@@ -299,5 +366,14 @@ main (int argc, char *argv[])
     gtk_init (&argc, &argv);
 
     Manager *manager = manager_new ();
+
+/*
+    Download *d = megaupload_download_new ("http://www.megaupload.com/?d=ZOAP2C3O", "~/fmp.part1.rar");
+
+    GtkTreeIter iter;
+    gtk_list_store_append (GTK_LIST_STORE (manager->priv->store), &iter);
+    gtk_list_store_set (GTK_LIST_STORE (manager->priv->store), &iter, 0, d, -1);
+    g_signal_connect (d, "position-changed", G_CALLBACK (download_pos_changed), manager);
+*/
     manager_run (manager);
 }
