@@ -49,8 +49,11 @@ struct _HttpDownloadClass {
     GObjectClass parent;
 };
 
-Download *http_download_new (const gchar *source, const gchar *dest);
+Download *http_download_new (const gchar *source, const gchar *dest, gboolean nohead);
 GType http_download_get_type (void);
+
+void http_download_set_post (HttpDownload *self, gchar *data);
+void http_download_set_referer (HttpDownload *self, gchar *data);
 
 G_END_DECLS
 

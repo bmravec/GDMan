@@ -8,7 +8,7 @@ AC_PROG_INSTALL
 
 PKG_PROG_PKG_CONFIG
 
-PKG_CHECK_MODULES(GLIB, glib-2.0 gthread-2.0 libnotify)
+PKG_CHECK_MODULES(GLIB, glib-2.0 gthread-2.0 libnotify libcurl)
 AC_SUBST(GLIB_CFLAGS)
 AC_SUBST(GLIB_LIBS)
 
