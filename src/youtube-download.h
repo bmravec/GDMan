@@ -50,6 +50,8 @@ struct _YoutubeDownloadClass {
 };
 
 Download *youtube_download_new (const gchar *source, const gchar *dest);
+Download *youtube_download_new_from_file (const gchar *filename);
+
 GType youtube_download_get_type (void);
 
 G_END_DECLS
