@@ -34,8 +34,6 @@
 #include "megaupload-download.h"
 #include "youtube-download.h"
 
-#include "megaupload-manager.h"
-
 G_DEFINE_TYPE(Manager, manager, G_TYPE_OBJECT)
 
 struct _ManagerPrivate {
@@ -51,8 +49,6 @@ struct _ManagerPrivate {
 
     DBusGConnection *conn;
     DBusGProxy *proxy;
-
-    MegauploadManager *mu_man;
 
     guint new_id;
 };
@@ -155,8 +151,6 @@ manager_init (Manager *self)
 
     dbus_g_connection_register_g_object (self->priv->conn,
         MANAGER_DBUS_PATH, G_OBJECT (self));
-
-    self->priv->mu_man = megaupload_manager_new ();
 }
 
 Manager*
@@ -207,6 +201,50 @@ manager_create_download (Manager *self, gchar *url, gchar *dest)
         g_strfreev (str1);
         g_strfreev (str2);
     }
+}
+
+gboolean
+manager_load_downloads (Manager *self)
+{
+    gchar *str = g_strdup_printf ("%s/gdman", g_get_user_config_dir ());
+
+    GDir *dir = g_dir_open (str, 0, NULL);
+    if (!dir) {
+        g_free (str);
+        return FALSE;
+    }
+
+    const gchar *filename;
+    gint i;
+
+    while (filename = g_dir_read_name (dir)) {
+        g_print ("FILE: %s\n", filename);
+
+        i = strlen (filename);
+        while (filename[--i] != '.');
+
+        const gchar *ext = filename+i+1;
+
+        g_print ("Ext: %s\n", ext);
+
+        gchar *path = g_build_filename (str, filename, NULL);
+
+        g_print ("Path: %s\n", path);
+
+        if (!g_strcmp0 (ext, "youtube")) {
+            Download *d = youtube_download_new_from_file (path);
+            manager_display_download (self, d);
+            download_start (d);
+        } else if (!g_strcmp0 (ext, "megaupload")) {
+
+        } else {
+
+        }
+
+        g_free (path);
+    }
+
+    g_free (str);
 }
 
 gboolean
@@ -367,13 +405,21 @@ main (int argc, char *argv[])
 
     Manager *manager = manager_new ();
 
-/*
-    Download *d = megaupload_download_new ("http://www.megaupload.com/?d=ZOAP2C3O", "~/fmp.part1.rar");
+    manager_load_downloads (manager);
+
+    manager_run (manager);
 
     GtkTreeIter iter;
-    gtk_list_store_append (GTK_LIST_STORE (manager->priv->store), &iter);
-    gtk_list_store_set (GTK_LIST_STORE (manager->priv->store), &iter, 0, d, -1);
-    g_signal_connect (d, "position-changed", G_CALLBACK (download_pos_changed), manager);
-*/
-    manager_run (manager);
+    Download *d;
+    if (gtk_tree_model_get_iter_first (manager->priv->store, &iter)) {
+        do {
+            gtk_tree_model_get (manager->priv->store, &iter, 0, &d, -1);
+
+            if (download_get_state (d) == DOWNLOAD_STATE_RUNNING) {
+                download_pause (d);
+            }
+
+            download_export_to_file (d);
+        } while (gtk_tree_model_iter_next (manager->priv->store, &iter));
+    }
 }
