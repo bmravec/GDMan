@@ -21,10 +21,10 @@
 
 #include <stdio.h>
 #include <string.h>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <netdb.h>
+#include <sys/stat.h>
+//#include <sys/socket.h>
+//#include <netinet/in.h>
+//#include <netdb.h>
 
 #include <curl/curl.h>
 
@@ -42,6 +42,7 @@ struct _HttpDownloadPrivate {
 
     CURL *curl;
     FILE *fptr;
+    GThread *main;
 
     gchar *title;
     gchar *host, *path;
@@ -52,15 +53,7 @@ struct _HttpDownloadPrivate {
 
     gint prev_time, prev_comp;
 
-    gboolean allow_bytes;
-    gboolean running;
-
-    gint total_time;
-
     gint state;
-
-    gchar *post_data;
-    gchar *referer;
 };
 
 static gchar *http_download_get_title (Download *self);
@@ -73,6 +66,8 @@ static gboolean http_download_start (Download *self);
 static gboolean http_download_stop (Download *self);
 static gboolean http_download_cancel (Download *self);
 static gboolean http_download_pause (Download *self);
+static gboolean http_download_export_to_file (Download *self);
+
 gpointer http_download_main (HttpDownload *self);
 
 static int socket_connect (char *host, int port);
@@ -94,6 +89,8 @@ download_init (DownloadInterface *iface)
     iface->stop = http_download_stop;
     iface->cancel = http_download_cancel;
     iface->pause = http_download_pause;
+
+    iface->export = http_download_export_to_file;
 }
 
 static void
@@ -120,18 +117,11 @@ http_download_init (HttpDownload *self)
 {
     self->priv = G_TYPE_INSTANCE_GET_PRIVATE((self), HTTP_DOWNLOAD_TYPE, HttpDownloadPrivate);
 
-    self->priv->allow_bytes = FALSE;
     self->priv->source = NULL;
     self->priv->dest = NULL;
-    self->priv->host = NULL;
-    self->priv->path = NULL;
 
     self->priv->size = 0;
     self->priv->completed = 0;
-    self->priv->total_time = 0;
-
-    self->priv->post_data = NULL;
-    self->priv->referer = NULL;
 }
 
 Download*
@@ -157,35 +147,67 @@ http_download_new (const gchar *source, const gchar *dest, gboolean nohead)
         self->priv->dest = new_dest;
     }
 
-
     self->priv->title = g_path_get_basename (self->priv->dest);
-
-    int sockfd, i;
-
-    gchar **proto_strs = g_strsplit (self->priv->source, "://", 2);
-    gchar **host_strs = g_strsplit (proto_strs[1], "/", 2);
-    gchar **port_strs = g_strsplit (host_strs[0], ":", 2);
-
-    if (port_strs[1]) {
-        self->priv->port = atoi (port_strs[1]);
-    } else {
-        self->priv->port = 80;
-    }
-
-    self->priv->host = g_strdup (port_strs[0]);
-    self->priv->path = g_strdup (host_strs[1]);
-
-    g_strfreev (port_strs);
-    g_strfreev (host_strs);
-    g_strfreev (proto_strs);
-
-    self->priv->curl = curl_easy_init ();
-    curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
-//    curl_easy_setopt (self->priv->curl, CURLOPT_VERBOSE, 1);
 
     g_print ("Download: %s -> %s\n", self->priv->source, self->priv->dest);
 
     return DOWNLOAD (self);
+}
+
+Download*
+http_download_new_from_file (const gchar *filename)
+{
+    GError *err = NULL;
+    GKeyFile *kf = g_key_file_new ();
+
+    HttpDownload *self = g_object_new (HTTP_DOWNLOAD_TYPE, NULL);
+
+    g_key_file_load_from_file (kf, filename, G_KEY_FILE_NONE, &err);
+
+    if (err) {
+        g_print ("Error loading %s: %s\n", filename, err->message);
+        g_error_free (err);
+        err = NULL;
+    }
+
+    self->priv->source = g_key_file_get_string (kf, "Download", "Source", NULL);
+    self->priv->dest = g_key_file_get_string (kf, "Download", "Destination", NULL);
+    self->priv->size = g_key_file_get_integer (kf, "Dowload", "Size", NULL);
+    self->priv->completed = g_key_file_get_integer (kf, "Download", "Completed", NULL);
+    self->priv->title = g_path_get_basename (self->priv->dest);
+
+    return DOWNLOAD (self);
+}
+
+static gboolean
+http_download_export_to_file (Download *self)
+{
+    HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
+    gint i = strlen (priv->source);
+    while (priv->source[i--] != '/');
+
+    gchar *str = g_strdup_printf ("%s/gdman/%s.http", g_get_user_config_dir (), priv->source+i+2);
+    FILE *fptr = fopen (str, "w");
+    g_free (str);
+
+    gchar *group = "[Download]\n";
+    fwrite (group, 1, strlen (group), fptr);
+
+    fwrite ("Source=", 1, 7, fptr);
+    fwrite (priv->source, 1, strlen (priv->source), fptr);
+
+    fwrite ("\nDestination=", 1, 13, fptr);
+    fwrite (priv->dest, 1, strlen (priv->dest), fptr);
+
+    str = g_strdup_printf ("\nSize=%d\n", priv->size);
+    fwrite (str, 1, strlen (str), fptr);
+    g_free (str);
+
+    str = g_strdup_printf ("Completed=%d\n", priv->completed);
+    fwrite (str, 1, strlen (str), fptr);
+    g_free (str);
+
+    fclose (fptr);
 }
 
 gchar*
@@ -210,7 +232,8 @@ http_download_get_size_completed (Download *self)
 gint
 http_download_get_time_total (Download *self)
 {
-    return HTTP_DOWNLOAD (self)->priv->total_time;
+//    return HTTP_DOWNLOAD (self)->priv->total_time;
+    return -1;
 }
 
 gint
@@ -238,8 +261,6 @@ http_download_get_state (Download *self)
 gboolean
 on_timeout (HttpDownload *self)
 {
-    self->priv->total_time++;
-
     gdouble cr;
     curl_easy_getinfo (self->priv->curl, CURLINFO_SPEED_DOWNLOAD, &cr);
 
@@ -250,7 +271,7 @@ on_timeout (HttpDownload *self)
 
     _emit_download_position_changed (DOWNLOAD (self));
 
-    if (self->priv->state == DOWNLOAD_STATE_COMPLETED) {
+    if (self->priv->state == DOWNLOAD_STATE_RUNNING) {
         return FALSE;
         g_object_unref (self);
     }
@@ -259,20 +280,14 @@ on_timeout (HttpDownload *self)
 }
 
 static size_t
-write_data (char *buff, size_t size, size_t num, HttpDownload *self)
+http_download_write_data (char *buff, size_t size, size_t num, HttpDownload *self)
 {
-    if (self->priv->size == 0 && self->priv->curl) {
-        gdouble fs;
-        curl_easy_getinfo (self->priv->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &fs);
-        self->priv->size = (gint) fs;
+    if (self->priv->state == DOWNLOAD_STATE_RUNNING) {
+        fwrite (buff, size, num, self->priv->fptr);
+        self->priv->completed += num * size;
+    } else {
+        return -1;
     }
-
-    if (!self->priv->fptr) {
-        self->priv->fptr = fopen (self->priv->dest, "w");
-    }
-
-    fwrite (buff, size, num, self->priv->fptr);
-    self->priv->completed += num * size;
 
     return size * num;
 }
@@ -282,21 +297,11 @@ http_download_start (Download *self)
 {
     HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
 
-    curl_easy_setopt (priv->curl, CURLOPT_WRITEFUNCTION, (curl_write_callback) write_data);
-    curl_easy_setopt (priv->curl, CURLOPT_WRITEDATA, HTTP_DOWNLOAD (self));
-
-    if (priv->post_data) {
-        curl_easy_setopt (priv->curl, CURLOPT_POST, 1);
-        curl_easy_setopt (priv->curl, CURLOPT_POSTFIELDS, priv->post_data);
-    }
-
-    g_thread_create ((GThreadFunc) http_download_main,
+    priv->main = g_thread_create ((GThreadFunc) http_download_main,
         HTTP_DOWNLOAD (self), FALSE, NULL);
 
     g_timeout_add (500, (GSourceFunc) on_timeout, self);
     g_object_ref (self);
-
-    priv->state = DOWNLOAD_STATE_RUNNING;
 }
 
 gboolean
@@ -314,24 +319,58 @@ http_download_cancel (Download *self)
 gboolean
 http_download_pause (Download *self)
 {
+    HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
 
-}
-
-void
-http_download_set_post (HttpDownload *self, gchar *data)
-{
-    self->priv->post_data = g_strdup (data);
-}
-
-void
-http_download_set_referer (HttpDownload *self, gchar *data)
-{
-    self->priv->referer = g_strdup (data);
+    switch (priv->state) {
+        case DOWNLOAD_STATE_RUNNING:
+            priv->state = DOWNLOAD_STATE_PAUSED;
+            g_thread_join (priv->main);
+            break;
+//        default:
+    };
 }
 
 gpointer
 http_download_main (HttpDownload *self)
 {
+    self->priv->curl = curl_easy_init ();
+
+    // Get file length in a HEAD request
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 1);
+
+    curl_easy_perform (self->priv->curl);
+
+    gdouble cl;
+    curl_easy_getinfo (self->priv->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &cl);
+
+    struct stat ostat;
+    g_stat (self->priv->dest, &ostat);
+
+    self->priv->size = cl;
+    if (ostat.st_size > 0 && ostat.st_size == self->priv->completed && ostat.st_size < cl) {
+        // If file has a length > 0 and is the same as the stored completed value
+        // and the file is not already downloaded, continue where left off
+        self->priv->completed = ostat.st_size;
+        curl_easy_setopt (self->priv->curl, CURLOPT_RESUME_FROM, (long) self->priv->completed);
+
+        self->priv->fptr = fopen (self->priv->dest, "a");
+    } else if (ostat.st_size == cl) {
+        // Download is completed
+        self->priv->state = DOWNLOAD_STATE_COMPLETED;
+        return;
+    } else {
+        // Either the download is new or an error occured so start over
+        self->priv->fptr = fopen (self->priv->dest, "w");
+    }
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 0);
+    curl_easy_setopt (self->priv->curl, CURLOPT_WRITEFUNCTION, (curl_write_callback) http_download_write_data);
+    curl_easy_setopt (self->priv->curl, CURLOPT_WRITEDATA, HTTP_DOWNLOAD (self));
+
+    self->priv->state = DOWNLOAD_STATE_RUNNING;
+
     curl_easy_perform (self->priv->curl);
 
     fclose (self->priv->fptr);

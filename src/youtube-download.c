@@ -372,7 +372,7 @@ youtube_timeout (YoutubeDownload *self)
 */
     _emit_download_position_changed (DOWNLOAD (self));
 
-    if (self->priv->state == DOWNLOAD_STATE_COMPLETED) {
+    if (self->priv->state != DOWNLOAD_STATE_RUNNING) {
         return FALSE;
         g_object_unref (self);
     }

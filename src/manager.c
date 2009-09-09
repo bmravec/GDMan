@@ -238,7 +238,9 @@ manager_load_downloads (Manager *self)
         } else if (!g_strcmp0 (ext, "megaupload")) {
 
         } else {
-
+            Download *d = http_download_new_from_file (path);
+            manager_display_download (self, d);
+            download_start (d);
         }
 
         g_free (path);

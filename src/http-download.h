@@ -50,10 +50,9 @@ struct _HttpDownloadClass {
 };
 
 Download *http_download_new (const gchar *source, const gchar *dest, gboolean nohead);
-GType http_download_get_type (void);
+Download *http_download_new_from_file (const gchar *filename);
 
-void http_download_set_post (HttpDownload *self, gchar *data);
-void http_download_set_referer (HttpDownload *self, gchar *data);
+GType http_download_get_type (void);
 
 G_END_DECLS
 

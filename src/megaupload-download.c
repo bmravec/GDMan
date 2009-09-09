@@ -125,6 +125,8 @@ megaupload_download_init (MegauploadDownload *self)
 Download*
 megaupload_download_new (const gchar *source, const gchar *dest)
 {
+    //TODO FIX IT
+    return NULL;
     MegauploadDownload *self = g_object_new (MEGAUPLOAD_DOWNLOAD_TYPE, NULL);
 
     self->priv->source = g_strdup (source);
@@ -356,7 +358,7 @@ megaupload_display_dialog (MegauploadDownload *self)
     gchar *str = g_strdup_printf ("captcha=%s&captchacode=%s&megavar=%s",
         self->priv->cap.captcha, self->priv->cap.captchacode, self->priv->cap.megavar);
 
-    http_download_set_post (HTTP_DOWNLOAD (self->priv->down), str);
+//    http_download_set_post (HTTP_DOWNLOAD (self->priv->down), str);
 
     self->priv->stage = MEGAUPLOAD_STAGE_DTHIRD;
 
@@ -405,7 +407,7 @@ on_state_changed (Download *download, guint state, MegauploadDownload *self)
 
                 self->priv->stage = MEGAUPLOAD_STAGE_DFILE;
 
-                http_download_set_referer (HTTP_DOWNLOAD (self->priv->down), self->priv->source);
+//                http_download_set_referer (HTTP_DOWNLOAD (self->priv->down), self->priv->source);
 
                 download_start (self->priv->down);
 
