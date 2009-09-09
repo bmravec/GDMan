@@ -180,6 +180,19 @@ download_pause (Download *self)
     }
 }
 
+gboolean
+download_export_to_file (Download *self)
+{
+    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
+
+    if (iface->export) {
+        return iface->export (self);
+    } else {
+        return FALSE;
+    }
+}
+
+
 void
 _emit_download_state_changed (Download *self, gint state)
 {

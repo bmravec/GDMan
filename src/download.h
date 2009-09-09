@@ -60,6 +60,8 @@ struct _DownloadInterface {
     gboolean (*stop) (Download *self);
     gboolean (*cancel) (Download *self);
     gboolean (*pause) (Download *self);
+
+    gboolean (*export) (Download *self);
 };
 
 GType download_get_type (void);
@@ -78,6 +80,8 @@ gboolean download_start (Download *self);
 gboolean download_stop (Download *self);
 gboolean download_cancel (Download *self);
 gboolean download_pause (Download *self);
+
+gboolean download_export_to_file (Download *self);
 
 void _emit_download_state_changed (Download *self, gint state);
 void _emit_download_position_changed (Download *self);
