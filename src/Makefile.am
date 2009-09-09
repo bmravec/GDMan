@@ -19,7 +19,6 @@ gdman_SOURCES = \
     download.c download.h \
     http-download.c http-download.h \
     megaupload-download.c megaupload-download.h \
-    megaupload-manager.c megaupload-manager.h \
     youtube-download.c youtube-download.h
 
 BUILT_SOURCES = manager-glue.h
