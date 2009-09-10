@@ -196,13 +196,17 @@ download_export_to_file (Download *self)
 void
 _emit_download_state_changed (Download *self, gint state)
 {
+    gdk_threads_enter ();
     g_signal_emit (self, signal_state_changed, 0, state);
+    gdk_threads_leave ();
 }
 
 void
 _emit_download_position_changed (Download *self)
 {
+    gdk_threads_enter ();
     g_signal_emit (self, signal_pos_changed, 0);
+    gdk_threads_leave ();
 }
 
 gchar*
