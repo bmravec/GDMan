@@ -22,9 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
-//#include <sys/socket.h>
-//#include <netinet/in.h>
-//#include <netdb.h>
+#include <time.h>
 
 #include <curl/curl.h>
 
@@ -45,13 +43,8 @@ struct _HttpDownloadPrivate {
     GThread *main;
 
     gchar *title;
-    gchar *host, *path;
-    gint port;
-
     gint size, completed;
-    gint rate;
-
-    gint prev_time, prev_comp;
+    time_t ot;
 
     gint state;
 };
@@ -149,8 +142,6 @@ http_download_new (const gchar *source, const gchar *dest, gboolean nohead)
 
     self->priv->title = g_path_get_basename (self->priv->dest);
 
-    g_print ("Download: %s -> %s\n", self->priv->source, self->priv->dest);
-
     return DOWNLOAD (self);
 }
 
@@ -232,7 +223,6 @@ http_download_get_size_completed (Download *self)
 gint
 http_download_get_time_total (Download *self)
 {
-//    return HTTP_DOWNLOAD (self)->priv->total_time;
     return -1;
 }
 
@@ -241,14 +231,13 @@ http_download_get_time_remaining (Download *self)
 {
     HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
 
-    if (priv->rate != 0) {
-        int nt = (priv->prev_time + 3 * (priv->size - priv->completed) / priv->rate) / 4;
+    gdouble cr;
+    curl_easy_getinfo (priv->curl, CURLINFO_SPEED_DOWNLOAD, &cr);
 
-        priv->prev_time = nt;
-
-        return nt;
+    if (cr != 0) {
+        return (priv->size - priv->completed) / cr;
     } else {
-        return 0;
+        return -1;
     }
 }
 
@@ -256,27 +245,6 @@ gint
 http_download_get_state (Download *self)
 {
     return HTTP_DOWNLOAD (self)->priv->state;
-}
-
-gboolean
-on_timeout (HttpDownload *self)
-{
-    gdouble cr;
-    curl_easy_getinfo (self->priv->curl, CURLINFO_SPEED_DOWNLOAD, &cr);
-
-    int diff = (self->priv->rate / 2 + 3 * (self->priv->completed - self->priv->prev_comp)) / 4;
-
-    self->priv->rate = (gint) cr;
-    self->priv->prev_comp = self->priv->completed;
-
-    _emit_download_position_changed (DOWNLOAD (self));
-
-    if (self->priv->state == DOWNLOAD_STATE_RUNNING) {
-        return FALSE;
-        g_object_unref (self);
-    }
-
-    return TRUE;
 }
 
 static size_t
@@ -298,10 +266,7 @@ http_download_start (Download *self)
     HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
 
     priv->main = g_thread_create ((GThreadFunc) http_download_main,
-        HTTP_DOWNLOAD (self), FALSE, NULL);
-
-    g_timeout_add (500, (GSourceFunc) on_timeout, self);
-    g_object_ref (self);
+        HTTP_DOWNLOAD (self), TRUE, NULL);
 }
 
 gboolean
@@ -328,6 +293,19 @@ http_download_pause (Download *self)
             break;
 //        default:
     };
+}
+
+int
+http_download_progress (HttpDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un)
+{
+    time_t nt = time (NULL);
+
+    if (nt != self->priv->ot) {
+        self->priv->ot = nt;
+        _emit_download_position_changed (DOWNLOAD (self));
+    }
+
+    return 0;
 }
 
 gpointer
@@ -366,8 +344,13 @@ http_download_main (HttpDownload *self)
 
     curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
     curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 0);
+
     curl_easy_setopt (self->priv->curl, CURLOPT_WRITEFUNCTION, (curl_write_callback) http_download_write_data);
-    curl_easy_setopt (self->priv->curl, CURLOPT_WRITEDATA, HTTP_DOWNLOAD (self));
+    curl_easy_setopt (self->priv->curl, CURLOPT_WRITEDATA, self);
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOPROGRESS, 0);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSFUNCTION, (curl_progress_callback) http_download_progress);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSDATA, self);
 
     self->priv->state = DOWNLOAD_STATE_RUNNING;
 
