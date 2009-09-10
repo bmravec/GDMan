@@ -22,6 +22,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 
 #include <curl/curl.h>
 
@@ -46,12 +47,12 @@ struct _YoutubeDownloadPrivate {
     gchar *buff;
     gint buff_pos;
 
-    gint size, completed, prev_comp;
+    gint size, completed;
 
     FILE *fptr;
     CURL *curl;
-
     GThread *main;
+    time_t ot;
 
     gint state, stage;
 };
@@ -72,6 +73,7 @@ gboolean youtube_timeout (YoutubeDownload *self);
 gpointer youtube_download_main (YoutubeDownload *self);
 
 static size_t youtube_write_data (char *buff, size_t size, size_t num, YoutubeDownload *self);
+static int youtube_download_progress (YoutubeDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un);
 
 static void
 download_init (DownloadInterface *iface)
@@ -175,7 +177,6 @@ youtube_download_export_to_file (Download *self)
     fwrite ("\nDestination=", 1, 13, fptr);
     fwrite (priv->dest, 1, strlen (priv->dest), fptr);
 
-//    fwrite ("\nSize=", 1, 6, fptr);
     str = g_strdup_printf ("\nSize=%d\n", priv->size);
     fwrite (str, 1, strlen (str), fptr);
     g_free (str);
@@ -225,7 +226,16 @@ youtube_download_get_time_total (Download *self)
 gint
 youtube_download_get_time_remaining (Download *self)
 {
-    return -1; // download_get_time_remaining (YOUTUBE_DOWNLOAD (self)->priv->down);
+    YoutubeDownloadPrivate *priv = YOUTUBE_DOWNLOAD (self)->priv;
+
+    gdouble cr;
+    curl_easy_getinfo (priv->curl, CURLINFO_SPEED_DOWNLOAD, &cr);
+
+    if (cr != 0) {
+        return (priv->size - priv->completed) / cr;
+    } else {
+        return -1;
+    }
 }
 
 gint
@@ -240,9 +250,6 @@ youtube_download_start (Download *self)
     YoutubeDownloadPrivate *priv = YOUTUBE_DOWNLOAD (self)->priv;
 
     priv->main = g_thread_create ((GThreadFunc) youtube_download_main, YOUTUBE_DOWNLOAD (self), TRUE, NULL);
-
-    g_timeout_add (500, (GSourceFunc) youtube_timeout, self);
-    g_object_ref (self);
 }
 
 gboolean
@@ -269,12 +276,6 @@ youtube_download_pause (Download *self)
             break;
 //        default:
     };
-}
-
-static void
-on_pos_changed (Download *download, YoutubeDownload *self)
-{
-    _emit_download_position_changed (DOWNLOAD (self));
 }
 
 static gchar*
@@ -357,27 +358,17 @@ youtube_write_data (char *buff, size_t size, size_t num, YoutubeDownload *self)
     return size * num;
 }
 
-gboolean
-youtube_timeout (YoutubeDownload *self)
+static int
+youtube_download_progress (YoutubeDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un)
 {
-//    self->priv->total_time++;
-/*
-    gdouble cr;
-    curl_easy_getinfo (self->priv->curl, CURLINFO_SPEED_DOWNLOAD, &cr);
+    time_t nt = time (NULL);
 
-    int diff = (self->priv->rate / 2 + 3 * (self->priv->completed - self->priv->prev_comp)) / 4;
-
-    self->priv->rate = (gint) cr;
-    self->priv->prev_comp = self->priv->completed;
-*/
-    _emit_download_position_changed (DOWNLOAD (self));
-
-    if (self->priv->state != DOWNLOAD_STATE_RUNNING) {
-        return FALSE;
-        g_object_unref (self);
+    if (nt != self->priv->ot) {
+        self->priv->ot = nt;
+        _emit_download_position_changed (DOWNLOAD (self));
     }
 
-    return TRUE;
+    return 0;
 }
 
 gpointer
@@ -391,6 +382,10 @@ youtube_download_main (YoutubeDownload *self)
     gchar *str = g_strdup_printf ("http://www.youtube.com/get_video_info?&video_id=%s", self->priv->source+i+2);
     curl_easy_setopt (self->priv->curl, CURLOPT_URL, str);
     g_free (str);
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOPROGRESS, 0);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSFUNCTION, (curl_progress_callback) youtube_download_progress);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSDATA, self);
 
     curl_easy_setopt (self->priv->curl, CURLOPT_WRITEFUNCTION, (curl_write_callback) youtube_write_data);
     curl_easy_setopt (self->priv->curl, CURLOPT_WRITEDATA, YOUTUBE_DOWNLOAD (self));
@@ -410,7 +405,6 @@ youtube_download_main (YoutubeDownload *self)
 
     gdouble cl;
     curl_easy_getinfo (self->priv->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &cl);
-    g_print ("CL: %f\n", cl);
 
     gchar *dest;
     if (self->priv->dest[0] == '/') {
@@ -433,23 +427,19 @@ youtube_download_main (YoutubeDownload *self)
     struct stat ostat;
     g_stat (dest, &ostat);
 
-    g_print ("Prev Size: %d\n", ostat.st_size);
-
     curl_easy_setopt (self->priv->curl, CURLOPT_URL, str);
     g_free (str);
 
     self->priv->size = cl;
-    if (ostat.st_size > 0 && ostat.st_size < cl) {
-        g_print ("Resuming: %d\n", self->priv->completed);
+    if (ostat.st_size > 0 && ostat.st_size == self->priv->completed && ostat.st_size < cl) {
         self->priv->completed = ostat.st_size;
         curl_easy_setopt (self->priv->curl, CURLOPT_RESUME_FROM, (long) self->priv->completed);
 
         self->priv->fptr = fopen (dest, "a");
     } else if (ostat.st_size == cl) {
-        g_print ("Already downloaded\n");
+        self->priv->state = DOWNLOAD_STATE_COMPLETED;
         return;
     } else {
-        g_print ("Starting\n");
         self->priv->fptr = fopen (dest, "w");
     }
 
@@ -457,11 +447,13 @@ youtube_download_main (YoutubeDownload *self)
     curl_easy_setopt (self->priv->curl, CURLOPT_WRITEFUNCTION, (curl_write_callback) youtube_write_data);
     curl_easy_setopt (self->priv->curl, CURLOPT_WRITEDATA, YOUTUBE_DOWNLOAD (self));
 
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOPROGRESS, 0);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSFUNCTION, (curl_progress_callback) youtube_download_progress);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSDATA, self);
+
     self->priv->stage = YOUTUBE_STAGE_DFILE;
 
     curl_easy_perform (self->priv->curl);
-
-    g_print ("After Download (%d)\n", self->priv->completed);
 
     self->priv->state = DOWNLOAD_STATE_COMPLETED;
     _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
