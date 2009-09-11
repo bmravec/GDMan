@@ -62,6 +62,8 @@ static gboolean http_download_pause (Download *self);
 static gboolean http_download_export_to_file (Download *self);
 
 gpointer http_download_main (HttpDownload *self);
+int http_download_progress (HttpDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un);
+static size_t http_download_write_data (char *buff, size_t size, size_t num, HttpDownload *self);
 
 static int socket_connect (char *host, int port);
 
