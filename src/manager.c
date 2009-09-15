@@ -30,6 +30,7 @@
 #include "manager-glue.h"
 
 #include "download.h"
+#include "download-group.h"
 #include "http-download.h"
 #include "megaupload-download.h"
 #include "youtube-download.h"
@@ -51,6 +52,7 @@ struct _ManagerPrivate {
     DBusGProxy *proxy;
 
     guint new_id;
+    DownloadGroup *group;
 };
 
 static Manager *instance = NULL;
@@ -143,6 +145,8 @@ manager_init (Manager *self)
 
     self->priv->new_id = 1;
 
+    self->priv->group = download_group_new ("Primary");
+
     self->priv->conn = dbus_g_bus_get (DBUS_BUS_SESSION, NULL);
     self->priv->proxy = dbus_g_proxy_new_for_name (self->priv->conn,
         DBUS_SERVICE_DBUS, DBUS_PATH_DBUS, DBUS_INTERFACE_DBUS);
@@ -152,6 +156,7 @@ manager_init (Manager *self)
 
     dbus_g_connection_register_g_object (self->priv->conn,
         MANAGER_DBUS_PATH, G_OBJECT (self));
+
 }
 
 Manager*
@@ -188,15 +193,18 @@ manager_create_download (Manager *self, gchar *url, gchar *dest)
         if (!g_strcmp0 (str2[0], "www.megaupload.com")) {
             Download *d = megaupload_download_new (url, dest);
             manager_display_download (self, d);
-            download_start (d);
+            download_group_queue (self->priv->group, d);
+//            download_start (d);
         } else if (!g_strcmp0 (str2[0], "www.youtube.com")) {
             Download *d = youtube_download_new (url, dest);
             manager_display_download (self, d);
-            download_start (d);
+//            download_start (d);
+            download_group_queue (self->priv->group, d);
         } else {
             Download *d = http_download_new (url, dest, FALSE);
             manager_display_download (self, d);
-            download_start (d);
+//            download_start (d);
+            download_group_queue (self->priv->group, d);
         }
 
         g_strfreev (str1);
@@ -281,6 +289,7 @@ manager_remove_download (Manager *self, Download *download)
 static void
 download_pos_changed (Download *download, Manager *self)
 {
+    gdk_threads_enter ();
     GtkTreeIter iter;
     Download *d;
 
@@ -294,14 +303,16 @@ download_pos_changed (Download *download, Manager *self)
             GtkTreePath *path = gtk_tree_model_get_path (self->priv->store, &iter);
             gtk_tree_model_row_changed (self->priv->store, path, &iter);
             gtk_tree_path_free (path);
-            return;
+            break;
         }
     } while (gtk_tree_model_iter_next (self->priv->store, &iter));
+    gdk_threads_leave ();
 }
 
 static void
 download_state_changed (Download *download, gint state, Manager *self)
 {
+    gdk_threads_enter ();
     GtkTreeIter iter;
     Download *d;
 
@@ -315,9 +326,10 @@ download_state_changed (Download *download, gint state, Manager *self)
             GtkTreePath *path = gtk_tree_model_get_path (self->priv->store, &iter);
             gtk_tree_model_row_changed (self->priv->store, path, &iter);
             gtk_tree_path_free (path);
-            return;
+            break;
         }
     } while (gtk_tree_model_iter_next (self->priv->store, &iter));
+    gdk_threads_leave ();
 }
 
 static void

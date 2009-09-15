@@ -16,6 +16,7 @@ bin_PROGRAMS = gdman
 gdman_LDADD = $(GLIB_LIBS) $(GTK_LIBS) $(DBUS_LIBS)
 gdman_SOURCES = \
     manager.c manager.h manager-glue.h \
+    download-group.c download-group.h \
     download.c download.h \
     http-download.c http-download.h \
     megaupload-download.c megaupload-download.h \

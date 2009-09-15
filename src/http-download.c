@@ -56,6 +56,7 @@ static gint http_download_get_time_total (Download *self);
 static gint http_download_get_time_remaining (Download *self);
 static gboolean http_download_get_state (Download *self);
 static gboolean http_download_start (Download *self);
+static gboolean http_download_queue (Download *self);
 static gboolean http_download_stop (Download *self);
 static gboolean http_download_cancel (Download *self);
 static gboolean http_download_pause (Download *self);
@@ -81,6 +82,7 @@ download_init (DownloadInterface *iface)
     iface->get_state = http_download_get_state;
 
     iface->start = http_download_start;
+    iface->queue = http_download_queue;
     iface->stop = http_download_stop;
     iface->cancel = http_download_cancel;
     iface->pause = http_download_pause;
@@ -270,6 +272,18 @@ http_download_start (Download *self)
 
     priv->main = g_thread_create ((GThreadFunc) http_download_main,
         HTTP_DOWNLOAD (self), TRUE, NULL);
+
+    priv->state = DOWNLOAD_STATE_RUNNING;
+    _emit_download_state_changed (self, priv->state);
+}
+
+gboolean
+http_download_queue (Download *self)
+{
+    HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
+
+    priv->state = DOWNLOAD_STATE_QUEUED;
+    _emit_download_state_changed (self, priv->state);
 }
 
 gboolean
@@ -316,6 +330,9 @@ http_download_main (HttpDownload *self)
 {
     self->priv->curl = curl_easy_init ();
 
+    self->priv->state = DOWNLOAD_STATE_RUNNING;
+    _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
+
     // Get file length in a HEAD request
     curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
     curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 1);
@@ -354,8 +371,6 @@ http_download_main (HttpDownload *self)
     curl_easy_setopt (self->priv->curl, CURLOPT_NOPROGRESS, 0);
     curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSFUNCTION, (curl_progress_callback) http_download_progress);
     curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSDATA, self);
-
-    self->priv->state = DOWNLOAD_STATE_RUNNING;
 
     curl_easy_perform (self->priv->curl);
 
