@@ -129,15 +129,16 @@ http_download_new (const gchar *source, const gchar *dest, gboolean nohead)
     if (dest[0] == '/') {
         self->priv->dest = g_strdup (dest);
     } else if (dest[0] == '~') {
-        self->priv->dest = g_build_filename (g_get_home_dir (), dest+2);
+        self->priv->dest = g_build_filename (g_get_home_dir (), dest+2, NULL);
     } else {
-        self->priv->dest = g_build_filename (g_get_tmp_dir (), dest);
+        self->priv->dest = g_build_filename (g_get_tmp_dir (), dest, NULL);
     }
 
     if (g_file_test (self->priv->dest, G_FILE_TEST_IS_DIR)) {
         gint len = strlen (source);
         while (source[--len] != '/');
-        gchar *new_dest = g_strdup_printf ("%s/%s", self->priv->dest, source+len);
+//        gchar *new_dest = g_strdup_printf ("%s/%s", self->priv->dest, source+len);
+        gchar *new_dest = g_build_filename (self->priv->dest, source + len, NULL);
         g_free (self->priv->dest);
         self->priv->dest = new_dest;
     }

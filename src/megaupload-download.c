@@ -21,6 +21,10 @@
 
 #include <stdio.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+
+#include <curl/curl.h>
 
 #include "megaupload-download.h"
 
@@ -33,7 +37,8 @@ G_DEFINE_TYPE_WITH_CODE (MegauploadDownload, megaupload_download, G_TYPE_OBJECT,
 )
 
 enum {
-    MEGAUPLOAD_STAGE_DFIRST = 0,
+    MEGAUPLOAD_STATE_NONE = 0,
+    MEGAUPLOAD_STAGE_DFIRST,
     MEGAUPLOAD_STAGE_DSECOND,
     MEGAUPLOAD_STAGE_DTHIRD,
     MEGAUPLOAD_STAGE_DFILE,
@@ -48,12 +53,17 @@ struct _MUCaptcha {
 };
 
 struct _MegauploadDownloadPrivate {
-    gchar *source, *dest, *title;
-    gchar *first_file, *second_file, *third_file;
+    gchar *source, *dest;
 
-    Download *down;
+    CURL *curl;
+    FILE *fptr;
+    GThread *main;
 
+    GdkPixbufLoader *img_loader;
+
+    gint size, completed;
     gint state, stage;
+    time_t ot;
 
     MUCaptcha cap;
 };
@@ -69,14 +79,15 @@ static gboolean megaupload_download_stop (Download *self);
 static gboolean megaupload_download_cancel (Download *self);
 static gboolean megaupload_download_pause (Download *self);
 
-static void megaupload_parse_captcha (gchar *filename, MUCaptcha *cap);
+gpointer megaupload_download_main (MegauploadDownload *self);
+int megaupload_download_progress (MegauploadDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un);
+static size_t megaupload_download_write_data (char *buff, size_t size, size_t num, MegauploadDownload *self);
 
-static void megaupload_start_element (GMarkupParseContext *context,
+static void megaupload_download_parse_captcha (gchar *filename, MUCaptcha *cap);
+
+static void megaupload_download_start_element (GMarkupParseContext *context,
     const gchar *element_name, const gchar **attribute_names,
     const gchar **attribute_values, gpointer user_data, GError **error);
-
-static void on_pos_changed (Download *download, MegauploadDownload *self);
-static void on_state_changed (Download *download, guint state, MegauploadDownload *self);
 
 static void
 download_init (DownloadInterface *iface)
@@ -125,27 +136,10 @@ megaupload_download_init (MegauploadDownload *self)
 Download*
 megaupload_download_new (const gchar *source, const gchar *dest)
 {
-    //TODO FIX IT
-    return NULL;
     MegauploadDownload *self = g_object_new (MEGAUPLOAD_DOWNLOAD_TYPE, NULL);
 
     self->priv->source = g_strdup (source);
     self->priv->dest = g_strdup (dest);
-
-    gint i = strlen (source);
-    while (source[i--] != '=');
-
-    g_print ("Title: %s\n", source+i+2);
-    self->priv->title = g_strdup (source+i+2);
-    self->priv->first_file = g_strdup_printf ("/tmp/mu%s.html", source+i+2);
-
-    self->priv->down = http_download_new (source, self->priv->first_file, FALSE);
-    g_signal_connect (self->priv->down, "position-changed", G_CALLBACK (on_pos_changed), self);
-    g_signal_connect (self->priv->down, "state-changed", G_CALLBACK (on_state_changed), self);
-
-    download_start (self->priv->down);
-
-    self->priv->stage = MEGAUPLOAD_STAGE_DFIRST;
 
     return DOWNLOAD (self);
 }
@@ -157,60 +151,59 @@ megaupload_download_get_title (Download *self)
 
     switch (priv->stage) {
         case MEGAUPLOAD_STAGE_DFIRST:
-            return g_strdup_printf ("Stage 1 / 4: %s", download_get_title (priv->down));
+            return g_strdup_printf ("Stage 1 / 4: %s", priv->source);
             break;
         case MEGAUPLOAD_STAGE_DSECOND:
-            return g_strdup_printf ("Stage 2 / 4: %s", download_get_title (priv->down));
+            return g_strdup_printf ("Stage 2 / 4: %s", priv->source);
             break;
         case MEGAUPLOAD_STAGE_DTHIRD:
-            return g_strdup_printf ("Stage 3 / 4: %s", download_get_title (priv->down));
+            return g_strdup_printf ("Stage 3 / 4: %s", priv->source);
             break;
         case MEGAUPLOAD_STAGE_DFILE:
-            return g_strdup_printf ("Stage 4 / 4: %s", download_get_title (priv->down));
+            return g_strdup_printf ("Stage 4 / 4: %s", priv->source);
             break;
         default:
-            return NULL;
+            return g_strdup (priv->source);
     }
 }
 
 gint
 megaupload_download_get_size_total (Download *self)
 {
-    return download_get_size_total (MEGAUPLOAD_DOWNLOAD (self)->priv->down);
+    return MEGAUPLOAD_DOWNLOAD (self)->priv->size;
 }
 
 gint
 megaupload_download_get_size_completed (Download *self)
 {
-    return download_get_size_completed (MEGAUPLOAD_DOWNLOAD (self)->priv->down);
+    return MEGAUPLOAD_DOWNLOAD (self)->priv->completed;
 }
 
 gint
 megaupload_download_get_time_total (Download *self)
 {
-
+    return -1;
 }
 
 gint
 megaupload_download_get_time_remaining (Download *self)
 {
-    return download_get_time_remaining (MEGAUPLOAD_DOWNLOAD (self)->priv->down);
+    return -1;
 }
 
 gint
 megaupload_download_get_state (Download *self)
 {
-//    return MEGAUPLOAD_DOWNLOAD (self)->priv->state;
+    return MEGAUPLOAD_DOWNLOAD (self)->priv->state;
 }
 
 gboolean
 megaupload_download_start (Download *self)
 {
-/*
-    g_thread_create ((GThreadFunc) megaupload_download_main,
-        MEGAUPLOAD_DOWNLOAD (self), FALSE, NULL);
-    g_timeout_add (1000, (GSourceFunc) on_timeout, self);
-*/
+    MegauploadDownloadPrivate *priv = MEGAUPLOAD_DOWNLOAD (self)->priv;
+
+    priv->main = g_thread_create ((GThreadFunc) megaupload_download_main,
+        MEGAUPLOAD_DOWNLOAD (self), TRUE, NULL);
 }
 
 gboolean
@@ -228,20 +221,21 @@ megaupload_download_cancel (Download *self)
 gboolean
 megaupload_download_pause (Download *self)
 {
+    MegauploadDownloadPrivate *priv = MEGAUPLOAD_DOWNLOAD (self)->priv;
 
+    switch (priv->state) {
+        case DOWNLOAD_STATE_RUNNING:
+            priv->state = DOWNLOAD_STATE_PAUSED;
+            g_thread_join (priv->main);
+            break;
+    };
 }
 
 static void
-on_pos_changed (Download *download, MegauploadDownload *self)
-{
-    _emit_download_position_changed (DOWNLOAD (self));
-}
-
-static void
-megaupload_parse_captcha (gchar *filename, MUCaptcha *cap)
+megaupload_download_parse_captcha (gchar *filename, MUCaptcha *cap)
 {
     GMarkupParser get_captcha = {
-        .start_element = megaupload_start_element,
+        .start_element = megaupload_download_start_element,
     };
 
     GMarkupParseContext *context;
@@ -281,8 +275,9 @@ megaupload_parse_captcha (gchar *filename, MUCaptcha *cap)
 }
 
 static void
-megaupload_get_captcha (MegauploadDownload *self)
+megaupload_download_get_captcha (GtkWidget *img, MUCaptcha *cap)
 {
+    gdk_threads_enter ();
     GtkWidget *dialog = gtk_dialog_new_with_buttons ("Enter Captcha", NULL,
         GTK_DIALOG_MODAL,
         GTK_STOCK_CANCEL, GTK_RESPONSE_REJECT,
@@ -295,8 +290,6 @@ megaupload_get_captcha (MegauploadDownload *self)
 
     GtkWidget *field = gtk_entry_new ();
 
-    GtkWidget *img = gtk_image_new_from_file (self->priv->second_file);
-
     gtk_box_pack_start (GTK_BOX (vbox), img, FALSE, FALSE, 0);
     gtk_box_pack_start (GTK_BOX (vbox), field, FALSE, FALSE, 0);
 
@@ -307,14 +300,15 @@ megaupload_get_captcha (MegauploadDownload *self)
     gint resp = gtk_dialog_run (GTK_DIALOG (dialog));
 
     if (resp == GTK_RESPONSE_ACCEPT) {
-        self->priv->cap.captcha = g_strdup (gtk_entry_get_text (GTK_ENTRY (field)));
+        cap->captcha = g_strdup (gtk_entry_get_text (GTK_ENTRY (field)));
     }
 
     gtk_widget_destroy (dialog);
+    gdk_threads_leave ();
 }
 
 static gchar*
-megaupload_parse_dl_link (gchar *filename)
+megaupload_download_parse_dl_link (gchar *filename)
 {
     GMarkupParseContext *context;
 
@@ -343,84 +337,8 @@ megaupload_parse_dl_link (gchar *filename)
     return url;
 }
 
-static gboolean
-megaupload_display_dialog (MegauploadDownload *self)
-{
-    megaupload_get_captcha (self);
-
-    g_object_unref (self->priv->down);
-
-    self->priv->third_file = g_strdup_printf ("/tmp/mu%s-2.html", self->priv->title);
-    self->priv->down = http_download_new (self->priv->source, self->priv->third_file, FALSE);
-    g_signal_connect (self->priv->down, "position-changed", G_CALLBACK (on_pos_changed), self);
-    g_signal_connect (self->priv->down, "state-changed", G_CALLBACK (on_state_changed), self);
-
-    gchar *str = g_strdup_printf ("captcha=%s&captchacode=%s&megavar=%s",
-        self->priv->cap.captcha, self->priv->cap.captchacode, self->priv->cap.megavar);
-
-//    http_download_set_post (HTTP_DOWNLOAD (self->priv->down), str);
-
-    self->priv->stage = MEGAUPLOAD_STAGE_DTHIRD;
-
-    download_start (self->priv->down);
-
-    return FALSE;
-}
-
 static void
-on_state_changed (Download *download, guint state, MegauploadDownload *self)
-{
-    gchar *str;
-    gint len;
-
-    if (state == DOWNLOAD_STATE_COMPLETED) {
-        switch (self->priv->stage) {
-            case MEGAUPLOAD_STAGE_DFIRST:
-                megaupload_parse_captcha (self->priv->first_file, &self->priv->cap);
-
-                g_object_unref (self->priv->down);
-
-                self->priv->second_file = g_strdup_printf ("/tmp/mu%s.gif", self->priv->title);
-
-                self->priv->down = http_download_new (self->priv->cap.img_addr, self->priv->second_file, FALSE);
-                g_signal_connect (self->priv->down, "position-changed", G_CALLBACK (on_pos_changed), self);
-                g_signal_connect (self->priv->down, "state-changed", G_CALLBACK (on_state_changed), self);
-
-                download_start (self->priv->down);
-
-                self->priv->stage = MEGAUPLOAD_STAGE_DSECOND;
-
-                break;
-            case MEGAUPLOAD_STAGE_DSECOND:
-                gdk_threads_add_timeout (250, (GSourceFunc) megaupload_display_dialog, self);
-
-                break;
-            case MEGAUPLOAD_STAGE_DTHIRD:
-                g_object_unref (self->priv->down);
-
-                str = megaupload_parse_dl_link (self->priv->third_file);
-
-                self->priv->down = http_download_new (str, self->priv->dest, FALSE);
-
-                g_signal_connect (self->priv->down, "position-changed", G_CALLBACK (on_pos_changed), self);
-                g_signal_connect (self->priv->down, "state-changed", G_CALLBACK (on_state_changed), self);
-
-                self->priv->stage = MEGAUPLOAD_STAGE_DFILE;
-
-//                http_download_set_referer (HTTP_DOWNLOAD (self->priv->down), self->priv->source);
-
-                download_start (self->priv->down);
-
-                break;
-            case MEGAUPLOAD_STAGE_DFILE:
-
-                break;
-        }
-    }
-}
-
-static void
-megaupload_start_element (GMarkupParseContext *context,
+megaupload_download_start_element (GMarkupParseContext *context,
     const gchar *element_name, const gchar **attribute_names,
     const gchar **attribute_values, gpointer user_data, GError **error)
 {
@@ -435,4 +353,208 @@ megaupload_start_element (GMarkupParseContext *context,
     } else if (!g_strcmp0 (element_name, "img")) {
         muc->img_addr = g_strdup (attribute_values[0]);
     }
+}
+
+int
+megaupload_download_progress (MegauploadDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un)
+{
+    if (self->priv->state != DOWNLOAD_STATE_RUNNING)
+        return -1;
+
+    time_t nt = time (NULL);
+
+    if (nt != self->priv->ot) {
+        self->priv->ot = nt;
+        _emit_download_position_changed (DOWNLOAD (self));
+    }
+
+    return 0;
+}
+
+static size_t
+megaupload_download_write_data (char *buff, size_t size, size_t num, MegauploadDownload *self)
+{
+    GError *err = NULL;
+
+    if (self->priv->state != DOWNLOAD_STATE_RUNNING) {
+        return -1;
+    }
+
+    switch (self->priv->stage) {
+        case MEGAUPLOAD_STAGE_DSECOND:
+            fwrite (buff, size, num, self->priv->fptr);
+            gdk_pixbuf_loader_write (self->priv->img_loader, buff, size * num, &err);
+            if (err) {
+                g_print ("Error Loading img: %s\n", err->message);
+                g_error_free (err);
+                err = NULL;
+                return -1;
+            }
+            break;
+        case MEGAUPLOAD_STAGE_DFILE:
+            fwrite (buff, size, num, self->priv->fptr);
+            self->priv->completed += size * num;
+        default:
+            fwrite (buff, size, num, self->priv->fptr);
+    }
+
+    return size * num;
+}
+
+gpointer
+megaupload_download_main (MegauploadDownload *self)
+{
+    gint i = 0;
+
+    self->priv->curl = curl_easy_init ();
+
+    while (self->priv->source[i++]);
+    while (self->priv->source[--i] != '=');
+
+    gchar *filename = g_strdup_printf ("/tmp/mu%s.html", self->priv->source+i+1);
+    self->priv->fptr = fopen (filename, "w");
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_WRITEFUNCTION, (curl_write_callback) megaupload_download_write_data);
+    curl_easy_setopt (self->priv->curl, CURLOPT_WRITEDATA, self);
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOPROGRESS, 0);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSFUNCTION, (curl_progress_callback) megaupload_download_progress);
+    curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSDATA, self);
+
+    self->priv->state = DOWNLOAD_STATE_RUNNING;
+    self->priv->stage = MEGAUPLOAD_STAGE_DFIRST;
+    _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
+
+    curl_easy_perform (self->priv->curl);
+    fclose (self->priv->fptr);
+
+    megaupload_download_parse_captcha (filename, &self->priv->cap);
+    g_free (filename);
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->cap.img_addr);
+
+    self->priv->stage = MEGAUPLOAD_STAGE_DSECOND;
+    self->priv->img_loader = gdk_pixbuf_loader_new_with_type ("gif", NULL);
+    filename = g_strdup_printf ("/tmp/mu%s.gif", self->priv->source+i+1);
+    self->priv->fptr = fopen (filename, "w");
+    g_free (filename);
+
+    curl_easy_perform (self->priv->curl);
+
+    fclose (self->priv->fptr);
+
+    GError *err = NULL;
+    gdk_pixbuf_loader_close (self->priv->img_loader, &err);
+    if (err) {
+        g_print ("Error processing img: %s\n", err->message);
+        g_error_free (err);
+        err = NULL;
+    }
+
+    GdkPixbuf *img = gdk_pixbuf_loader_get_pixbuf (self->priv->img_loader);
+    GtkWidget *img_w = gtk_image_new_from_pixbuf (img);
+
+    megaupload_download_get_captcha (img_w, &self->priv->cap);
+
+    g_object_unref (img_w);
+
+    filename = g_strdup_printf ("/tmp/mu%s-2.html", self->priv->source+i+1);
+    self->priv->fptr = fopen (filename, "w");
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_VERBOSE, 1);
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, self->priv->source);
+
+    gchar *str = g_strdup_printf ("captcha=%s&captchacode=%s&megavar=%s",
+        self->priv->cap.captcha, self->priv->cap.captchacode, self->priv->cap.megavar);
+    curl_easy_setopt (self->priv->curl, CURLOPT_POST, 1);
+    curl_easy_setopt (self->priv->curl, CURLOPT_POSTFIELDS, str);
+    curl_easy_setopt (self->priv->curl, CURLOPT_REFERER, self->priv->source);
+
+    self->priv->stage = MEGAUPLOAD_STAGE_DTHIRD;
+    _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
+
+    curl_easy_perform (self->priv->curl);
+    g_free (str);
+    fclose (self->priv->fptr);
+
+    gchar *name = megaupload_download_parse_dl_link (filename);
+    g_free (filename);
+
+    gchar *newdest = NULL;
+    if (self->priv->dest[0] == '/') {
+        newdest = g_strdup (self->priv->dest);
+    } else if (self->priv->dest[0] == '~') {
+        newdest = g_build_filename (g_get_home_dir (), self->priv->dest+2, NULL);
+    } else {
+        newdest = g_build_filename (g_get_tmp_dir (), self->priv->dest, NULL);
+    }
+
+    if (g_file_test (newdest, G_FILE_TEST_IS_DIR)) {
+        gint len = strlen (name);
+        while (name[--len] != '/');
+        newdest = g_build_filename (newdest, name + len, NULL);
+    }
+
+    g_free (self->priv->dest);
+    self->priv->dest = newdest;
+
+    g_print ("URL: %s\n", name);
+    g_print ("DEST: %s\n", self->priv->dest);
+/*
+    // Get file length in a HEAD request
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, name);
+    curl_easy_setopt (self->priv->curl, CURLOPT_HTTPGET, 1);
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 1);
+    curl_easy_setopt (self->priv->curl, CURLOPT_REFERER, self->priv->source);
+
+    curl_easy_perform (self->priv->curl);
+    g_print ("Post Perform\n");
+
+    gdouble cl;
+    curl_easy_getinfo (self->priv->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &cl);
+
+    struct stat ostat;
+    g_stat (self->priv->dest, &ostat);
+
+    g_print ("CL: %f\n", cl);
+    g_print ("STAT: %d\n", ostat.st_size);
+
+    self->priv->size = cl;
+    if (ostat.st_size > 0 && ostat.st_size == self->priv->completed && ostat.st_size < cl) {
+        // If file has a length > 0 and is the same as the stored completed value
+        // and the file is not already downloaded, continue where left off
+        self->priv->completed = ostat.st_size;
+        curl_easy_setopt (self->priv->curl, CURLOPT_RESUME_FROM, (long) self->priv->completed);
+
+        self->priv->fptr = fopen (self->priv->dest, "a");
+    } else if (ostat.st_size == cl) {
+        // Download is completed
+        self->priv->state = DOWNLOAD_STATE_COMPLETED;
+        return;
+    } else {
+        // Either the download is new or an error occured so start over
+        self->priv->fptr = fopen (self->priv->dest, "w");
+    }
+*/
+    self->priv->fptr = fopen (self->priv->dest, "w");
+
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, name);
+    curl_easy_setopt (self->priv->curl, CURLOPT_HTTPGET, 1);
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 0);
+
+    self->priv->stage = MEGAUPLOAD_STAGE_DFILE;
+    _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
+
+    g_print ("Starting Download\n");
+    curl_easy_perform (self->priv->curl);
+    g_print ("Stopped Download\n");
+    g_free (name);
+
+    fclose (self->priv->fptr);
+
+    self->priv->state = DOWNLOAD_STATE_COMPLETED;
+    self->priv->stage = MEGAUPLOAD_STATE_NONE;
+    _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
 }

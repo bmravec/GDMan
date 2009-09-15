@@ -59,6 +59,7 @@ static guint signal_add;
 static guint signal_remove;
 
 static void download_pos_changed (Download *download, Manager *self);
+static void download_state_changed (Download *download, gint state, Manager *self);
 static void progress_column_func (GtkTreeViewColumn *column, GtkCellRenderer *cell,
     GtkTreeModel *model, GtkTreeIter *iter, gchar *data);
 static void title_column_func (GtkTreeViewColumn *column, GtkCellRenderer *cell,
@@ -267,6 +268,7 @@ manager_display_download (Manager *self, Download *download)
     GtkTreeIter iter;
     gtk_list_store_append (GTK_LIST_STORE (self->priv->store), &iter);
     gtk_list_store_set (GTK_LIST_STORE (self->priv->store), &iter, 0, download, -1);
+    g_signal_connect (download, "state-changed", G_CALLBACK (download_state_changed), self);
     g_signal_connect (download, "position-changed", G_CALLBACK (download_pos_changed), self);
 }
 
@@ -282,7 +284,30 @@ download_pos_changed (Download *download, Manager *self)
     GtkTreeIter iter;
     Download *d;
 
-    gtk_tree_model_get_iter_first (self->priv->store, &iter);
+    if (!gtk_tree_model_get_iter_first (self->priv->store, &iter)) {
+        return;
+    }
+
+    do {
+        gtk_tree_model_get (self->priv->store, &iter, 0, &d, -1);
+        if (d == download) {
+            GtkTreePath *path = gtk_tree_model_get_path (self->priv->store, &iter);
+            gtk_tree_model_row_changed (self->priv->store, path, &iter);
+            gtk_tree_path_free (path);
+            return;
+        }
+    } while (gtk_tree_model_iter_next (self->priv->store, &iter));
+}
+
+static void
+download_state_changed (Download *download, gint state, Manager *self)
+{
+    GtkTreeIter iter;
+    Download *d;
+
+    if (!gtk_tree_model_get_iter_first (self->priv->store, &iter)) {
+        return;
+    }
 
     do {
         gtk_tree_model_get (self->priv->store, &iter, 0, &d, -1);
