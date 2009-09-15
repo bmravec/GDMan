@@ -145,6 +145,18 @@ download_start (Download *self)
 }
 
 gboolean
+download_queue (Download *self)
+{
+    DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);
+
+    if (iface->start) {
+        return iface->queue (self);
+    } else {
+        return FALSE;
+    }
+}
+
+gboolean
 download_stop (Download *self)
 {
     DownloadInterface *iface = DOWNLOAD_GET_IFACE (self);

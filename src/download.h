@@ -32,6 +32,7 @@
 enum {
     DOWNLOAD_STATE_NONE = 0,
     DOWNLOAD_STATE_RUNNING,
+    DOWNLOAD_STATE_QUEUED,
     DOWNLOAD_STATE_PAUSED,
     DOWNLOAD_STATE_COMPLETED,
     DOWNLOAD_STATE_CANCELED,
@@ -57,6 +58,7 @@ struct _DownloadInterface {
     gint   (*get_state) (Download *self);
 
     gboolean (*start) (Download *self);
+    gboolean (*queue) (Download *self);
     gboolean (*stop) (Download *self);
     gboolean (*cancel) (Download *self);
     gboolean (*pause) (Download *self);
@@ -77,6 +79,7 @@ gint download_get_time_remaining (Download *self);
 gint download_get_state (Download *self);
 
 gboolean download_start (Download *self);
+gboolean download_queue (Download *self);
 gboolean download_stop (Download *self);
 gboolean download_cancel (Download *self);
 gboolean download_pause (Download *self);
