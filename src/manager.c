@@ -245,7 +245,9 @@ manager_load_downloads (Manager *self)
             manager_display_download (self, d);
             download_start (d);
         } else if (!g_strcmp0 (ext, "megaupload")) {
-
+            Download *d = megaupload_download_new_from_file (path);
+            manager_display_download (self, d);
+            download_start (d);
         } else {
             Download *d = http_download_new_from_file (path);
             manager_display_download (self, d);

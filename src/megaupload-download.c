@@ -75,9 +75,11 @@ static gint megaupload_download_get_time_total (Download *self);
 static gint megaupload_download_get_time_remaining (Download *self);
 static gboolean megaupload_download_get_state (Download *self);
 static gboolean megaupload_download_start (Download *self);
+static gboolean megaupload_download_queue (Download *self);
 static gboolean megaupload_download_stop (Download *self);
 static gboolean megaupload_download_cancel (Download *self);
 static gboolean megaupload_download_pause (Download *self);
+static gboolean megaupload_download_export_to_file (Download *self);
 
 gpointer megaupload_download_main (MegauploadDownload *self);
 int megaupload_download_progress (MegauploadDownload *self, gdouble dt, gdouble dn, gdouble ut, gdouble un);
@@ -103,9 +105,12 @@ download_init (DownloadInterface *iface)
     iface->get_state = megaupload_download_get_state;
 
     iface->start = megaupload_download_start;
+    iface->queue = megaupload_download_queue;
     iface->stop = megaupload_download_stop;
     iface->cancel = megaupload_download_cancel;
     iface->pause = megaupload_download_pause;
+
+    iface->export = megaupload_download_export_to_file;
 }
 
 static void
@@ -142,6 +147,66 @@ megaupload_download_new (const gchar *source, const gchar *dest)
     self->priv->dest = g_strdup (dest);
 
     return DOWNLOAD (self);
+}
+
+Download*
+megaupload_download_new_from_file (const gchar *filename)
+{
+    GError *err = NULL;
+    GKeyFile *kf = g_key_file_new ();
+
+    MegauploadDownload *self = g_object_new (MEGAUPLOAD_DOWNLOAD_TYPE, NULL);
+
+    g_key_file_load_from_file (kf, filename, G_KEY_FILE_NONE, &err);
+
+    if (err) {
+        g_print ("Error loading %s: %s\n", filename, err->message);
+        g_error_free (err);
+        err = NULL;
+    }
+
+    self->priv->source = g_key_file_get_string (kf, "Download", "Source", NULL);
+    self->priv->dest = g_key_file_get_string (kf, "Download", "Destination", NULL);
+    self->priv->state = g_key_file_get_integer (kf, "Download", "State", NULL);
+    self->priv->size = g_key_file_get_integer (kf, "Dowload", "Size", NULL);
+    self->priv->completed = g_key_file_get_integer (kf, "Download", "Completed", NULL);
+
+    return DOWNLOAD (self);
+}
+
+static gboolean
+megaupload_download_export_to_file (Download *self)
+{
+    MegauploadDownloadPrivate *priv = MEGAUPLOAD_DOWNLOAD (self)->priv;
+    gint i = strlen (priv->source);
+    while (priv->source[i--] != '=');
+
+    gchar *str = g_strdup_printf ("%s/gdman/%s.megaupload", g_get_user_config_dir (), priv->source+i+2);
+    FILE *fptr = fopen (str, "w");
+    g_free (str);
+
+    gchar *group = "[Download]\n";
+    fwrite (group, 1, strlen (group), fptr);
+
+    fwrite ("Source=", 1, 7, fptr);
+    fwrite (priv->source, 1, strlen (priv->source), fptr);
+
+    fwrite ("\nDestination=", 1, 13, fptr);
+    fwrite (priv->dest, 1, strlen (priv->dest), fptr);
+
+    str = g_strdup_printf ("\nState=%d\n", priv->state);
+    fwrite (str, 1, strlen (str), fptr);
+    g_free (str);
+
+    str = g_strdup_printf ("\nSize=%d\n", priv->size);
+    fwrite (str, 1, strlen (str), fptr);
+    g_free (str);
+
+    str = g_strdup_printf ("Completed=%d\n", priv->completed);
+    fwrite (str, 1, strlen (str), fptr);
+    g_free (str);
+
+    fclose (fptr);
 }
 
 gchar*
@@ -204,6 +269,12 @@ megaupload_download_start (Download *self)
 
     priv->main = g_thread_create ((GThreadFunc) megaupload_download_main,
         MEGAUPLOAD_DOWNLOAD (self), TRUE, NULL);
+}
+
+static gboolean
+megaupload_download_queue (Download *self)
+{
+    MEGAUPLOAD_DOWNLOAD (self)->priv->state = DOWNLOAD_STATE_QUEUED;
 }
 
 gboolean
@@ -392,6 +463,11 @@ megaupload_download_write_data (char *buff, size_t size, size_t num, MegauploadD
             }
             break;
         case MEGAUPLOAD_STAGE_DFILE:
+            if (self->priv->size == 0) {
+                gdouble cl;
+                curl_easy_getinfo (self->priv->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &cl);
+                self->priv->size = cl;
+            }
             fwrite (buff, size, num, self->priv->fptr);
             self->priv->completed += size * num;
         default:
@@ -502,6 +578,7 @@ megaupload_download_main (MegauploadDownload *self)
 
     g_print ("URL: %s\n", name);
     g_print ("DEST: %s\n", self->priv->dest);
+
 /*
     // Get file length in a HEAD request
     curl_easy_setopt (self->priv->curl, CURLOPT_URL, name);
@@ -514,22 +591,26 @@ megaupload_download_main (MegauploadDownload *self)
 
     gdouble cl;
     curl_easy_getinfo (self->priv->curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD, &cl);
-
+*/
     struct stat ostat;
     g_stat (self->priv->dest, &ostat);
 
-    g_print ("CL: %f\n", cl);
+//    g_print ("CL: %f\n", cl);
     g_print ("STAT: %d\n", ostat.st_size);
 
-    self->priv->size = cl;
-    if (ostat.st_size > 0 && ostat.st_size == self->priv->completed && ostat.st_size < cl) {
+    curl_easy_setopt (self->priv->curl, CURLOPT_URL, name);
+    curl_easy_setopt (self->priv->curl, CURLOPT_HTTPGET, 1);
+    curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 0);
+
+//    self->priv->size = cl;
+    if (ostat.st_size > 0 && ostat.st_size == self->priv->completed && ostat.st_size < self->priv->size) {
         // If file has a length > 0 and is the same as the stored completed value
         // and the file is not already downloaded, continue where left off
         self->priv->completed = ostat.st_size;
         curl_easy_setopt (self->priv->curl, CURLOPT_RESUME_FROM, (long) self->priv->completed);
 
         self->priv->fptr = fopen (self->priv->dest, "a");
-    } else if (ostat.st_size == cl) {
+    } else if (ostat.st_size == self->priv->size && self->priv->size != 0) {
         // Download is completed
         self->priv->state = DOWNLOAD_STATE_COMPLETED;
         return;
@@ -537,12 +618,8 @@ megaupload_download_main (MegauploadDownload *self)
         // Either the download is new or an error occured so start over
         self->priv->fptr = fopen (self->priv->dest, "w");
     }
-*/
-    self->priv->fptr = fopen (self->priv->dest, "w");
 
-    curl_easy_setopt (self->priv->curl, CURLOPT_URL, name);
-    curl_easy_setopt (self->priv->curl, CURLOPT_HTTPGET, 1);
-    curl_easy_setopt (self->priv->curl, CURLOPT_NOBODY, 0);
+    self->priv->fptr = fopen (self->priv->dest, "w");
 
     self->priv->stage = MEGAUPLOAD_STAGE_DFILE;
     _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
