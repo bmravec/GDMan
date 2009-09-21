@@ -123,17 +123,18 @@ download_group_queue (DownloadGroup *self, Download *d)
         download_group_add (self, d);
     }
 
+    if (download_get_state (d) != DOWNLOAD_STATE_QUEUED) {
+        return;
+    }
+
     for (i = 0; i < self->priv->downloads->len; i++) {
         if (d == self->priv->downloads->pdata[i]) continue;
         gint state = download_get_state (DOWNLOAD (self->priv->downloads->pdata[i]));
-        g_print ("STATE: %d\n", state);
         if (state == DOWNLOAD_STATE_QUEUED || state == DOWNLOAD_STATE_RUNNING) {
             download_queue (d);
-            g_print ("Download Queue\n");
             return;
         }
     }
 
     download_start (d);
-    g_print ("Download Start\n");
 }

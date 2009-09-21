@@ -139,7 +139,6 @@ http_download_new (const gchar *source, const gchar *dest, gboolean nohead)
     if (g_file_test (self->priv->dest, G_FILE_TEST_IS_DIR)) {
         gint len = strlen (source);
         while (source[--len] != '/');
-//        gchar *new_dest = g_strdup_printf ("%s/%s", self->priv->dest, source+len);
         gchar *new_dest = g_build_filename (self->priv->dest, source + len, NULL);
         g_free (self->priv->dest);
         self->priv->dest = new_dest;
@@ -168,7 +167,8 @@ http_download_new_from_file (const gchar *filename)
 
     self->priv->source = g_key_file_get_string (kf, "Download", "Source", NULL);
     self->priv->dest = g_key_file_get_string (kf, "Download", "Destination", NULL);
-    self->priv->size = g_key_file_get_integer (kf, "Dowload", "Size", NULL);
+    self->priv->state = g_key_file_get_integer (kf, "Download", "State", NULL);
+    self->priv->size = g_key_file_get_integer (kf, "Download", "Size", NULL);
     self->priv->completed = g_key_file_get_integer (kf, "Download", "Completed", NULL);
     self->priv->title = g_path_get_basename (self->priv->dest);
 
@@ -186,6 +186,11 @@ http_download_export_to_file (Download *self)
     FILE *fptr = fopen (str, "w");
     g_free (str);
 
+    if (priv->state == DOWNLOAD_STATE_RUNNING) {
+        priv->state = DOWNLOAD_STATE_QUEUED;
+        g_thread_join (priv->main);
+    }
+
     gchar *group = "[Download]\n";
     fwrite (group, 1, strlen (group), fptr);
 
@@ -194,6 +199,10 @@ http_download_export_to_file (Download *self)
 
     fwrite ("\nDestination=", 1, 13, fptr);
     fwrite (priv->dest, 1, strlen (priv->dest), fptr);
+
+    str = g_strdup_printf ("\nState=%d", priv->state);
+    fwrite (str, 1, strlen (str), fptr);
+    g_free (str);
 
     str = g_strdup_printf ("\nSize=%d\n", priv->size);
     fwrite (str, 1, strlen (str), fptr);
@@ -235,6 +244,10 @@ gint
 http_download_get_time_remaining (Download *self)
 {
     HttpDownloadPrivate *priv = HTTP_DOWNLOAD (self)->priv;
+
+    if (priv->state != DOWNLOAD_STATE_RUNNING) {
+        return -1;
+    }
 
     gdouble cr;
     curl_easy_getinfo (priv->curl, CURLINFO_SPEED_DOWNLOAD, &cr);
@@ -372,10 +385,12 @@ http_download_main (HttpDownload *self)
     curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSFUNCTION, (curl_progress_callback) http_download_progress);
     curl_easy_setopt (self->priv->curl, CURLOPT_PROGRESSDATA, self);
 
-    curl_easy_perform (self->priv->curl);
+    gint res = curl_easy_perform (self->priv->curl);
 
     fclose (self->priv->fptr);
 
-    self->priv->state = DOWNLOAD_STATE_COMPLETED;
-    _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
+    if (res == 0) {
+        self->priv->state = DOWNLOAD_STATE_COMPLETED;
+        _emit_download_state_changed (DOWNLOAD (self), self->priv->state);
+    }
 }

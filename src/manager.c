@@ -190,20 +190,18 @@ manager_create_download (Manager *self, gchar *url, gchar *dest)
         gchar **str1 = g_strsplit (url+7, "/", 2);
         gchar **str2 = g_strsplit (str1[0], ":", 2);
 
+        Download *d = NULL;
         if (!g_strcmp0 (str2[0], "www.megaupload.com")) {
-            Download *d = megaupload_download_new (url, dest);
-            manager_display_download (self, d);
-            download_group_queue (self->priv->group, d);
-//            download_start (d);
+            d = megaupload_download_new (url, dest);
         } else if (!g_strcmp0 (str2[0], "www.youtube.com")) {
-            Download *d = youtube_download_new (url, dest);
-            manager_display_download (self, d);
-//            download_start (d);
-            download_group_queue (self->priv->group, d);
+            d = youtube_download_new (url, dest);
         } else {
-            Download *d = http_download_new (url, dest, FALSE);
+            d = http_download_new (url, dest, FALSE);
+        }
+
+        if (d) {
             manager_display_download (self, d);
-//            download_start (d);
+            download_queue (d);
             download_group_queue (self->priv->group, d);
         }
 
@@ -240,18 +238,18 @@ manager_load_downloads (Manager *self)
 
         g_print ("Path: %s\n", path);
 
+        Download *d = NULL;
         if (!g_strcmp0 (ext, "youtube")) {
-            Download *d = youtube_download_new_from_file (path);
-            manager_display_download (self, d);
-            download_start (d);
+            d = youtube_download_new_from_file (path);
         } else if (!g_strcmp0 (ext, "megaupload")) {
-            Download *d = megaupload_download_new_from_file (path);
+            d = megaupload_download_new_from_file (path);
+        } else if (!g_strcmp0 (ext, "http")) {
+            d = http_download_new_from_file (path);
+        }
+
+        if (d) {
             manager_display_download (self, d);
-            download_start (d);
-        } else {
-            Download *d = http_download_new_from_file (path);
-            manager_display_download (self, d);
-            download_start (d);
+            download_group_queue (self->priv->group, d);
         }
 
         g_free (path);
@@ -455,11 +453,6 @@ main (int argc, char *argv[])
     if (gtk_tree_model_get_iter_first (manager->priv->store, &iter)) {
         do {
             gtk_tree_model_get (manager->priv->store, &iter, 0, &d, -1);
-
-            if (download_get_state (d) == DOWNLOAD_STATE_RUNNING) {
-                download_pause (d);
-            }
-
             download_export_to_file (d);
         } while (gtk_tree_model_iter_next (manager->priv->store, &iter));
     }

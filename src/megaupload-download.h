@@ -52,6 +52,8 @@ struct _MegauploadDownloadClass {
 Download *megaupload_download_new (const gchar *source, const gchar *dest);
 GType megaupload_download_get_type (void);
 
+Download *megaupload_download_new_from_file (const gchar *filename);
+
 G_END_DECLS
 
 #endif /* __MEGAUPLOAD_DOWNLOAD_H__ */
